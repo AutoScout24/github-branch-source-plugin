@@ -81,6 +81,7 @@ import org.kohsuke.github.GitHub;
 import org.kohsuke.github.GitHubBuilder;
 import org.kohsuke.github.RateLimitHandler;
 import org.kohsuke.github.extras.okhttp3.OkHttpConnector;
+import static org.jenkinsci.plugins.github_branch_source.Endpoint.credentialsFor;
 
 import static java.util.logging.Level.FINE;
 
@@ -135,8 +136,18 @@ public class Connector {
      */
     @NonNull
     public static ListBoxModel listScanCredentials(@CheckForNull Item context, String apiUri) {
-        return new StandardListBoxModel()
-                .includeEmptyValue()
+        //LOGGER.log(Level.FINE, "Listing scan credentials {0}, {1}", new Object[]{ context.toString(), apiUri });
+        LOGGER.log(Level.FINE, "Listing scan credentials");
+        try {
+          boolean result = context instanceof Queue.Task;
+          LOGGER.log(Level.FINE, "context instanceof Queue.Task: {0}", new Object[]{ result });
+          String acl = Tasks.getDefaultAuthenticationOf((Queue.Task) context).toString();
+          LOGGER.log(Level.FINE, "ACL: {0}", new Object[]{ acl });
+        } catch (Exception e){
+
+        }
+        StandardListBoxModel result = new StandardListBoxModel();
+          result.includeEmptyValue()
                 .includeMatchingAs(
                         context instanceof Queue.Task
                                 ? ((Queue.Task) context).getDefaultAuthentication()
@@ -146,6 +157,9 @@ public class Connector {
                         githubDomainRequirements(apiUri),
                         githubScanCredentialsMatcher()
                 );
+
+        LOGGER.log(Level.FINE, "ListBoxModel: {0}", new Object[]{ result.toString() });
+        return result;
     }
 
     /**
@@ -334,6 +348,29 @@ public class Connector {
         }
     }
 
+    public static @NonNull GitHub connectPrivileged(@CheckForNull String apiUri) throws IOException {
+        String apiUrl = Util.fixEmptyAndTrim(apiUri);
+        apiUrl = apiUrl != null ? apiUrl : GitHubServerConfig.GITHUB_URL;
+
+        LOGGER.log(Level.FINE, "Using privileged credentials from global config");
+
+        StandardCredentials systemCredentials = null;
+        try {
+          LOGGER.log(Level.FINE, "API URI: {0}", new Object[]{apiUrl});
+          Endpoint e = GitHubConfiguration.get().findEndpoint(apiUrl);
+          LOGGER.log(Level.FINE, "Found endpoint: {0}", new Object[]{ e });
+          systemCredentials = e.credentialsFor(e.getCredentialsId());
+          LOGGER.log(Level.FINE, "Found credentials: {0}", new Object[]{ systemCredentials });
+        } catch (Exception ex) {
+          LOGGER.log(Level.WARNING, "Exception: {0}", new Object[]{ ex });
+        }
+        if (systemCredentials != null) {
+          return connect(apiUri, systemCredentials);
+        } else {
+          return connect(apiUri, null);
+        }
+    }
+
     public static @Nonnull GitHub connect(@CheckForNull String apiUri, @CheckForNull StandardCredentials credentials) throws IOException {
         String apiUrl = Util.fixEmptyAndTrim(apiUri);
         apiUrl = apiUrl != null ? apiUrl : GitHubServerConfig.GITHUB_URL;
@@ -347,6 +384,19 @@ public class Connector {
             password = null;
             hash = "anonymous";
             authHash = "anonymous";
+            StandardCredentials systemCredentials = null;
+            try {
+              LOGGER.log(Level.FINE, "API URI: {0}", new Object[]{apiUrl});
+              Endpoint e = GitHubConfiguration.get().findEndpoint(apiUrl);
+              LOGGER.log(Level.FINE, "Found endpoint: {0}", new Object[]{ e });
+              systemCredentials = e.credentialsFor(e.getCredentialsId());
+              LOGGER.log(Level.FINE, "Found credentials: {0}", new Object[]{ systemCredentials });
+            } catch (Exception ex) {
+              LOGGER.log(Level.WARNING, "Exception: {0}", new Object[]{ ex });
+            }
+            if (systemCredentials != null) {
+              return connect(apiUri, systemCredentials);
+            }
         } else if (credentials instanceof StandardUsernamePasswordCredentials) {
             StandardUsernamePasswordCredentials c = (StandardUsernamePasswordCredentials) credentials;
             username = c.getUsername();
@@ -584,6 +634,24 @@ public class Connector {
             hubs.put(github, null);
         }
         if (credentials != null && !isCredentialValid(github)) {
+          StandardCredentials systemCredentials = null;
+          try {
+            String apiUrl = Util.fixEmptyAndTrim(apiUri);
+            apiUrl = apiUrl != null ? apiUrl : GitHubServerConfig.GITHUB_URL;
+            LOGGER.log(Level.FINE, "API URI: {0}", new Object[]{apiUrl});
+            Endpoint e = GitHubConfiguration.get().findEndpoint(apiUrl);
+            LOGGER.log(Level.FINE, "Found endpoint: {0}", new Object[]{ e });
+            systemCredentials = e.credentialsFor(e.getCredentialsId());
+            LOGGER.log(Level.FINE, "Found credentials: {0}", new Object[]{ systemCredentials });
+          } catch (Exception ex) {
+            LOGGER.log(Level.WARNING, "Exception: {0}", new Object[]{ ex });
+          }
+          if (systemCredentials != null) {
+            checkConnectionValidity(apiUri, listener, systemCredentials, github);
+            return;
+          }
+        }
+        if (credentials != null && !github.isCredentialValid()) {
             String message = String.format("Invalid scan credentials %s to connect to %s, skipping",
                     CredentialsNameProvider.name(credentials), apiUri == null ? GitHubSCMSource.GITHUB_URL : apiUri);
             throw new AbortException(message);
@@ -607,7 +675,104 @@ public class Connector {
     /*package*/
     static void checkApiRateLimit(@NonNull TaskListener listener, GitHub github)
             throws IOException, InterruptedException {
-        GitHubConfiguration.get().getApiRateLimitChecker().checkApiRateLimit(listener, github);
+
+        final boolean DISABLE_RATE_LIMIT_CHECK = Boolean.parseBoolean(System
+                .getProperty(Connector.class.getName() + ".DISABLE_RATE_LIMIT_CHECK", Boolean.FALSE.toString()));
+
+        boolean check;
+        if (DISABLE_RATE_LIMIT_CHECK) {
+            check = false;
+            listener.getLogger().println(GitHubConsoleNote.create(System.currentTimeMillis(),  String.format(
+                "GitHub API Usage: skipping the check as it was disabled by system property %s", Connector.class.getName()
+        )));
+        }
+        else {
+            check = true;
+        }
+
+        while (check) {
+            check = false;
+            long start = System.currentTimeMillis();
+            GHRateLimit rateLimit = github.rateLimit();
+            long rateLimitResetMillis = rateLimit.getResetDate().getTime() - start;
+            double resetProgress = rateLimitResetMillis / MILLIS_PER_HOUR;
+            // the buffer is how much we want to avoid using to cover unplanned over-use
+            int buffer = Math.max(15, rateLimit.limit / 20);
+            // the burst is how much we want to allow for speedier response outside of the throttle
+            int burst = rateLimit.limit < 1000 ? Math.max(5, rateLimit.limit / 10) : Math.max(200, rateLimit.limit / 5);
+            // the ideal is how much remaining we should have (after a burst)
+            int ideal = (int) ((rateLimit.limit - buffer - burst) * resetProgress) + buffer;
+            if (rateLimit.remaining >= ideal && rateLimit.remaining < ideal + buffer) {
+                listener.getLogger().println(GitHubConsoleNote.create(start, String.format(
+                        "GitHub API Usage: Current quota has %d remaining (%d under budget). Next quota of %d in %s",
+                        rateLimit.remaining, rateLimit.remaining - ideal, rateLimit.limit,
+                        Util.getTimeSpanString(rateLimitResetMillis)
+                )));
+            } else  if (rateLimit.remaining < ideal) {
+                check = true;
+                final long expiration;
+                if (rateLimit.remaining < buffer) {
+                    // nothing we can do, we have burned into our buffer, wait for reset
+                    // we add a little bit of random to prevent CPU overload when the limit is due to reset but GitHub
+                    // hasn't actually reset yet (clock synchronization is a hard problem)
+                    if (rateLimitResetMillis < 0) {
+                        expiration = System.currentTimeMillis() + ENTROPY.nextInt(65536); // approx 1 min
+                        listener.getLogger().println(GitHubConsoleNote.create(System.currentTimeMillis(), String.format(
+                                "GitHub API Usage: Current quota has %d remaining (%d over budget). Next quota of %d due now. Sleeping for %s.",
+                                rateLimit.remaining, ideal - rateLimit.remaining, rateLimit.limit,
+                                Util.getTimeSpanString(expiration - System.currentTimeMillis())
+                        )));
+                    } else {
+                        expiration = rateLimit.getResetDate().getTime() + ENTROPY.nextInt(65536); // approx 1 min
+                        listener.getLogger().println(GitHubConsoleNote.create(System.currentTimeMillis(), String.format(
+                                "GitHub API Usage: Current quota has %d remaining (%d over budget). Next quota of %d in %s. Sleeping until reset.",
+                                rateLimit.remaining, ideal - rateLimit.remaining, rateLimit.limit,
+                                Util.getTimeSpanString(rateLimitResetMillis)
+                        )));
+                    }
+                } else {
+                    // work out how long until remaining == ideal + 0.1 * buffer (to give some spend)
+                    double targetFraction = (rateLimit.remaining - buffer * 1.1) / (rateLimit.limit - buffer - burst);
+                    expiration = rateLimit.getResetDate().getTime()
+                            - Math.max(0, (long) (targetFraction * MILLIS_PER_HOUR))
+                            + ENTROPY.nextInt(1000);
+                    listener.getLogger().println(GitHubConsoleNote.create(System.currentTimeMillis(), String.format(
+                            "GitHub API Usage: Current quota has %d remaining (%d over budget). Next quota of %d in %s. Sleeping for %s.",
+                            rateLimit.remaining, ideal - rateLimit.remaining, rateLimit.limit,
+                            Util.getTimeSpanString(rateLimitResetMillis),
+                            Util.getTimeSpanString(expiration - System.currentTimeMillis())
+                    )));
+                }
+                long nextNotify = System.currentTimeMillis() + TimeUnit.MINUTES.toMillis(3);
+                while (expiration > System.currentTimeMillis()) {
+                    if (Thread.interrupted()) {
+                        throw new InterruptedException();
+                    }
+                    long sleep = Math.min(expiration, nextNotify) - System.currentTimeMillis();
+                    if (sleep > 0) {
+                        Thread.sleep(sleep);
+                    }
+                    // A random straw poll of users concluded that 3 minutes without any visible progress in the logs
+                    // is the point after which people believe that the process is dead.
+                    nextNotify += TimeUnit.SECONDS.toMillis(180);
+                    long now = System.currentTimeMillis();
+                    if (now < expiration) {
+                        GHRateLimit current = github.getRateLimit();
+                        if (current.remaining > rateLimit.remaining
+                                || current.getResetDate().getTime() > rateLimit.getResetDate().getTime()) {
+                            listener.getLogger().println(GitHubConsoleNote.create(now,
+                                    "GitHub API Usage: The quota may have been refreshed earlier than expected, rechecking..."
+                            ));
+                            break;
+                        }
+                        listener.getLogger().println(GitHubConsoleNote.create(now, String.format(
+                                "GitHub API Usage: Still sleeping, now only %s remaining.",
+                                Util.getTimeSpanString(expiration - now)
+                        )));
+                    }
+                }
+            }
+        }
     }
 
     @Extension
