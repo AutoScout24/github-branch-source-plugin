@@ -31,7 +31,6 @@ import jenkins.scm.api.SCMHeadCategory;
 import jenkins.scm.api.SCMHeadOrigin;
 import jenkins.scm.api.SCMRevision;
 import jenkins.scm.api.SCMSource;
-import jenkins.scm.api.trait.SCMBuilder;
 import jenkins.scm.api.trait.SCMHeadAuthority;
 import jenkins.scm.api.trait.SCMHeadAuthorityDescriptor;
 import jenkins.scm.api.trait.SCMHeadFilter;
@@ -40,6 +39,7 @@ import jenkins.scm.api.trait.SCMSourceRequest;
 import jenkins.scm.api.trait.SCMSourceTrait;
 import jenkins.scm.api.trait.SCMSourceTraitDescriptor;
 import jenkins.scm.impl.trait.Discovery;
+import org.jenkinsci.Symbol;
 import org.kohsuke.accmod.Restricted;
 import org.kohsuke.accmod.restrictions.NoExternalUse;
 import org.kohsuke.github.GHPullRequest;
@@ -55,7 +55,7 @@ public class BranchDiscoveryTrait extends SCMSourceTrait {
     /**
      * The strategy encoded as a bit-field.
      */
-    private int strategyId;
+    private final int strategyId;
 
     /**
      * Constructor for stapler.
@@ -94,7 +94,6 @@ public class BranchDiscoveryTrait extends SCMSourceTrait {
     @Restricted(NoExternalUse.class)
     public boolean isBuildBranch() {
         return (strategyId & 1) != 0;
-
     }
 
     /**
@@ -143,6 +142,7 @@ public class BranchDiscoveryTrait extends SCMSourceTrait {
     /**
      * Our descriptor.
      */
+    @Symbol("gitHubBranchDiscovery")
     @Extension
     @Discovery
     public static class DescriptorImpl extends SCMSourceTraitDescriptor {
@@ -174,7 +174,7 @@ public class BranchDiscoveryTrait extends SCMSourceTrait {
         /**
          * Populates the strategy options.
          *
-         * @return the stategy options.
+         * @return the strategy options.
          */
         @NonNull
         @Restricted(NoExternalUse.class)
@@ -203,6 +203,7 @@ public class BranchDiscoveryTrait extends SCMSourceTrait {
         /**
          * Out descriptor.
          */
+        @Symbol("gitHubBranchHeadAuthority")
         @Extension
         public static class DescriptorImpl extends SCMHeadAuthorityDescriptor {
             /**

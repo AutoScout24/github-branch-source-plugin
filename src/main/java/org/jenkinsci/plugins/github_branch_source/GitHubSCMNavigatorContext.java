@@ -23,6 +23,9 @@
  */
 package org.jenkinsci.plugins.github_branch_source;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import edu.umd.cs.findbugs.annotations.NonNull;
 import jenkins.scm.api.SCMNavigator;
 import jenkins.scm.api.SCMSourceObserver;
@@ -34,6 +37,22 @@ import jenkins.scm.api.trait.SCMNavigatorContext;
  * @since 2.2.0
  */
 public class GitHubSCMNavigatorContext extends SCMNavigatorContext<GitHubSCMNavigatorContext, GitHubSCMNavigatorRequest> {
+
+    /**
+     * The team name of the repositories to navigate.
+     */
+    private String teamSlug = "";
+
+    /**
+     * The topic which the repositories must have.
+     */
+    private ArrayList<String> topics = new ArrayList<String>();
+
+    /**
+     * If true, archived repositories will be ignored.
+     */
+    private boolean excludeArchivedRepositories;
+
     /**
      * {@inheritDoc}
      */
@@ -41,5 +60,49 @@ public class GitHubSCMNavigatorContext extends SCMNavigatorContext<GitHubSCMNavi
     @Override
     public GitHubSCMNavigatorRequest newRequest(@NonNull SCMNavigator navigator, @NonNull SCMSourceObserver observer) {
         return new GitHubSCMNavigatorRequest(navigator, this, observer);
+    }
+
+    /**
+     * Sets the name of the team who's repositories will be navigated.
+     */
+    void setTeamSlug(String teamSlug) {
+        this.teamSlug = teamSlug;
+    }
+
+    /**
+     * Gets the name of the team who's repositories will be navigated.
+     * @return teamSlug
+     */
+    public String getTeamSlug() {
+        return teamSlug;
+    }
+
+    /**
+     * Sets the topics which the repositories must have.
+     */
+    public void setTopics(ArrayList<String> topics) {
+        this.topics = topics;
+    }
+
+    /**
+     * Gets the topics which the repositories must have.
+     * @return topics
+     */
+    public List<String> getTopics() {
+        return topics;
+    }
+
+    /**
+     * @return True if archived repositories should be ignored, false if they should be included.
+     */
+    public boolean isExcludeArchivedRepositories() {
+        return excludeArchivedRepositories;
+    }
+
+    /**
+     * @param excludeArchivedRepositories Set true to exclude archived repositories
+     */
+    public void setExcludeArchivedRepositories(boolean excludeArchivedRepositories) {
+        this.excludeArchivedRepositories = excludeArchivedRepositories;
     }
 }

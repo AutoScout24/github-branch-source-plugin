@@ -24,27 +24,38 @@
 
 package org.jenkinsci.plugins.github_branch_source;
 
+import edu.umd.cs.findbugs.annotations.CheckForNull;
 import edu.umd.cs.findbugs.annotations.NonNull;
 import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
+import hudson.AbortException;
 import jenkins.plugins.git.AbstractGitSCMSource;
 import jenkins.scm.api.mixin.ChangeRequestCheckoutStrategy;
 import jenkins.scm.api.mixin.ChangeRequestSCMRevision;
 import jenkins.scm.api.mixin.ChangeRequestSCMHead2;
+import org.apache.commons.lang.StringUtils;
+import org.kohsuke.stapler.export.Exported;
 
 /**
  * Revision of a pull request.
  */
 public class PullRequestSCMRevision extends ChangeRequestSCMRevision<PullRequestSCMHead> {
-    
+
     private static final long serialVersionUID = 1L;
+    static final String NOT_MERGEABLE_HASH = "NOT_MERGEABLE";
 
     private final @NonNull String baseHash;
     private final @NonNull String pullHash;
+    private final String mergeHash;
 
-    PullRequestSCMRevision(@NonNull PullRequestSCMHead head, @NonNull String baseHash, @NonNull String pullHash) {
+    public PullRequestSCMRevision(@NonNull PullRequestSCMHead head, @NonNull String baseHash, @NonNull String pullHash) {
+        this(head, baseHash, pullHash, null);
+    }
+
+    PullRequestSCMRevision(@NonNull PullRequestSCMHead head, @NonNull String baseHash, @NonNull String pullHash, String mergeHash) {
         super(head, new AbstractGitSCMSource.SCMRevisionImpl(head.getTarget(), baseHash));
         this.baseHash = baseHash;
         this.pullHash = pullHash;
+        this.mergeHash = mergeHash;
     }
 
     @SuppressFBWarnings({"SE_PRIVATE_READ_RESOLVE_NOT_INHERITED", "RCN_REDUNDANT_NULLCHECK_OF_NONNULL_VALUE"})
@@ -74,9 +85,26 @@ public class PullRequestSCMRevision extends ChangeRequestSCMRevision<PullRequest
      *
      * @return The commit hash of the head of the pull request branch
      */
+    @Exported
     @NonNull
     public String getPullHash() {
         return pullHash;
+    }
+
+    /**
+     * The commit hash of the head of the pull request branch.
+     *
+     * @return The commit hash of the head of the pull request branch
+     */
+    @CheckForNull
+    public String getMergeHash() {
+        return mergeHash;
+    }
+
+    void validateMergeHash() throws AbortException {
+        if (this.mergeHash == NOT_MERGEABLE_HASH) {
+            throw new AbortException("Pull request " + ((PullRequestSCMHead)this.getHead()).getNumber() + " : Not mergeable at " + this.toString());
+        }
     }
 
     @Override
@@ -85,6 +113,10 @@ public class PullRequestSCMRevision extends ChangeRequestSCMRevision<PullRequest
             return false;
         }
         PullRequestSCMRevision other = (PullRequestSCMRevision) o;
+
+        // JENKINS-57583 - Equivalent is used to make decisions about when to build.
+        // mergeHash is an implementation detail of github, generated from base and target
+        // If only mergeHash changes we do not consider it a different revision
         return getHead().equals(other.getHead()) && pullHash.equals(other.pullHash);
     }
 
@@ -95,7 +127,11 @@ public class PullRequestSCMRevision extends ChangeRequestSCMRevision<PullRequest
 
     @Override
     public String toString() {
-        return getHead() instanceof PullRequestSCMHead && ((PullRequestSCMHead) getHead()).isMerge() ? pullHash + "+" + baseHash : pullHash;
+        String result = pullHash;
+        if (getHead() instanceof PullRequestSCMHead && ((PullRequestSCMHead) getHead()).isMerge()) {
+            result += "+" + baseHash +
+                " (" + StringUtils.defaultIfBlank(mergeHash, "UNKNOWN_MERGE_STATE") + ")";
+        }
+        return result;
     }
-
 }

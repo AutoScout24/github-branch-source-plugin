@@ -24,23 +24,22 @@
 
 package org.jenkinsci.plugins.github_branch_source;
 
-import hudson.ExtensionPoint;
 import hudson.model.TaskListener;
 
 import java.util.List;
 
 /**
  * Represents a strategy for constructing GitHub status notifications
- * @since TODO
+ * @since 2.3.2
  */
-public abstract class AbstractGitHubNotificationStrategy implements ExtensionPoint {
+public abstract class AbstractGitHubNotificationStrategy {
 
     /**
      * Creates the list of {@link GitHubNotificationRequest} for the given context.
      * @param notificationContext {@link GitHubNotificationContext} the context details
      * @param listener the listener
      * @return a list of notification requests
-     * @since TODO
+     * @since 2.3.2
      */
     public abstract List<GitHubNotificationRequest> notifications(GitHubNotificationContext notificationContext, TaskListener listener);
 

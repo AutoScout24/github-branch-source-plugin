@@ -27,137 +27,114 @@ package org.jenkinsci.plugins.github_branch_source;
 
 import com.cloudbees.jenkins.GitHubRepositoryName;
 import com.cloudbees.jenkins.GitHubRepositoryNameContributor;
-import com.github.tomakehurst.wiremock.common.FileSource;
 import com.github.tomakehurst.wiremock.common.SingleRootFileSource;
-import com.github.tomakehurst.wiremock.core.WireMockConfiguration;
-import com.github.tomakehurst.wiremock.extension.Parameters;
-import com.github.tomakehurst.wiremock.extension.ResponseTransformer;
-import com.github.tomakehurst.wiremock.http.Request;
-import com.github.tomakehurst.wiremock.http.Response;
-import com.github.tomakehurst.wiremock.junit.WireMockRule;
+import com.github.tomakehurst.wiremock.stubbing.Scenario;
+
 import edu.umd.cs.findbugs.annotations.NonNull;
+import hudson.AbortException;
 import hudson.ExtensionList;
-import hudson.model.Action;
 import hudson.model.FreeStyleProject;
 import hudson.model.Item;
 import hudson.model.TaskListener;
 import hudson.model.User;
 import hudson.security.ACL;
+import hudson.security.ACLContext;
 import hudson.security.AuthorizationStrategy;
 import hudson.security.SecurityRealm;
 import hudson.util.ListBoxModel;
 import hudson.util.LogTaskListener;
 import java.io.File;
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.*;
 
 import jenkins.branch.BranchSource;
-import jenkins.branch.MultiBranchProject;
 import jenkins.model.Jenkins;
 import jenkins.plugins.git.GitSCMSource;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import jenkins.scm.api.SCMFile;
-import jenkins.scm.api.SCMHead;
-import jenkins.scm.api.SCMHeadObserver;
-import jenkins.scm.api.SCMHeadOrigin;
-import jenkins.scm.api.SCMRevision;
-import jenkins.scm.api.SCMSourceCriteria;
-import jenkins.scm.api.SCMSourceOwner;
+
+import jenkins.scm.api.*;
 import jenkins.scm.api.metadata.ObjectMetadataAction;
 import jenkins.scm.api.mixin.ChangeRequestCheckoutStrategy;
 import org.hamcrest.Matchers;
 import org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject;
 import org.junit.Before;
-import org.junit.ClassRule;
-import org.junit.Rule;
 import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.junit.runners.Parameterized;
 import org.jvnet.hudson.test.Issue;
-import org.jvnet.hudson.test.JenkinsRule;
 import org.jvnet.hudson.test.MockAuthorizationStrategy;
-import org.jvnet.hudson.test.MockFolder;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
 import static com.github.tomakehurst.wiremock.client.WireMock.get;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlMatching;
+import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
 import static org.hamcrest.Matchers.allOf;
 import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.containsInAnyOrder;
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.hasProperty;
 import static org.hamcrest.Matchers.hasSize;
+import static org.hamcrest.Matchers.nullValue;
 import static org.hamcrest.Matchers.instanceOf;
 import static org.hamcrest.Matchers.sameInstance;
 import static org.hamcrest.core.Is.is;
-import static org.junit.Assert.assertThat;
+import static org.junit.Assert.*;
 
-public class GitHubSCMSourceTest {
-    /**
-     * All tests in this class only use Jenkins for the extensions
-     */
-    @ClassRule
-    public static JenkinsRule r = new JenkinsRule();
+@RunWith(Parameterized.class)
+public class GitHubSCMSourceTest extends GitSCMSourceBase{
 
-    public static WireMockRuleFactory factory = new WireMockRuleFactory();
+    public GitHubSCMSourceTest(GitHubSCMSource source) {
+        this.source = source;
+    }
 
-    @Rule
-    public WireMockRule githubRaw = factory.getRule(WireMockConfiguration.options()
-            .dynamicPort()
-            .usingFilesUnderClasspath("raw")
-    );
-    @Rule
-    public WireMockRule githubApi = factory.getRule(WireMockConfiguration.options()
-            .dynamicPort()
-            .usingFilesUnderClasspath("api")
-            .extensions(
-                    new ResponseTransformer() {
-                        @Override
-                        public Response transform(Request request, Response response, FileSource files,
-                                                  Parameters parameters) {
-                            if ("application/json"
-                                    .equals(response.getHeaders().getContentTypeHeader().mimeTypePart())) {
-                                return Response.Builder.like(response)
-                                        .but()
-                                        .body(response.getBodyAsString()
-                                                .replace("https://api.github.com/",
-                                                        "http://localhost:" + githubApi.port() + "/")
-                                                .replace("https://raw.githubusercontent.com/",
-                                                        "http://localhost:" + githubRaw.port() + "/")
-                                        )
-                                        .build();
-                            }
-                            return response;
-                        }
+    @Parameterized.Parameters(name = "{index}: revision={0}")
+    public static GitHubSCMSource[] revisions() {
+        return new GitHubSCMSource[]{
+                new GitHubSCMSource("cloudbeers", "yolo", null, false),
+                new GitHubSCMSource("", "", "https://github.com/cloudbeers/yolo", true)
+            };
+    }
 
-                        @Override
-                        public String getName() {
-                            return "url-rewrite";
-                        }
-
-                    })
-    );
-    private GitHubSCMSource source;
 
     @Before
-    public void prepareMockGitHub() throws Exception {
+    public void prepareMockGitHubStubs() throws Exception {
         new File("src/test/resources/api/mappings").mkdirs();
         new File("src/test/resources/api/__files").mkdirs();
-        new File("src/test/resources/raw/mappings").mkdirs();
-        new File("src/test/resources/raw/__files").mkdirs();
         githubApi.enableRecordMappings(new SingleRootFileSource("src/test/resources/api/mappings"),
                 new SingleRootFileSource("src/test/resources/api/__files"));
-        githubRaw.enableRecordMappings(new SingleRootFileSource("src/test/resources/raw/mappings"),
-                new SingleRootFileSource("src/test/resources/raw/__files"));
+
         githubApi.stubFor(
-                get(urlMatching(".*")).atPriority(10).willReturn(aResponse().proxiedFrom("https://api.github.com/")));
-        githubRaw.stubFor(get(urlMatching(".*")).atPriority(10)
-                .willReturn(aResponse().proxiedFrom("https://raw.githubusercontent.com/")));
-        source = new GitHubSCMSource(null, "http://localhost:" + githubApi.port(), GitHubSCMSource.DescriptorImpl.SAME, null, "cloudbeers", "yolo");
+            get(urlEqualTo("/repos/cloudbeers/yolo/pulls/2"))
+            .inScenario("Pull Request Merge Hash")
+            .whenScenarioStateIs(Scenario.STARTED)
+            .willReturn(
+                aResponse()
+                .withHeader("Content-Type", "application/json; charset=utf-8")
+                .withBodyFile("body-yolo-pulls-2-mergeable-null.json"))
+            .willSetStateTo("Pull Request Merge Hash - retry 1"));
+
+        githubApi.stubFor(
+            get(urlEqualTo("/repos/cloudbeers/yolo/pulls/2"))
+            .inScenario("Pull Request Merge Hash")
+            .whenScenarioStateIs("Pull Request Merge Hash - retry 1")
+            .willReturn(
+                aResponse()
+                .withHeader("Content-Type", "application/json; charset=utf-8")
+                .withBodyFile("body-yolo-pulls-2-mergeable-null.json"))
+            .willSetStateTo("Pull Request Merge Hash - retry 2"));
+
+        githubApi.stubFor(
+            get(urlEqualTo("/repos/cloudbeers/yolo/pulls/2"))
+            .inScenario("Pull Request Merge Hash")
+            .whenScenarioStateIs("Pull Request Merge Hash - retry 2")
+            .willReturn(
+                aResponse()
+                .withHeader("Content-Type", "application/json; charset=utf-8")
+                .withBodyFile("body-yolo-pulls-2-mergeable-true.json"))
+            .willSetStateTo("Pull Request Merge Hash - retry 2"));
     }
 
     @Test
@@ -185,11 +162,11 @@ public class GitHubSCMSourceTest {
         WorkflowMultiBranchProject job = r.createProject(WorkflowMultiBranchProject.class);
         job.setSourcesList(Arrays.asList(new BranchSource(new GitSCMSource("file://tmp/something"))));
         Collection<GitHubRepositoryName> names = GitHubRepositoryNameContributor.parseAssociatedNames(job);
-        assertThat(names, Matchers.<GitHubRepositoryName>empty());
+        assertThat(names, Matchers.empty());
         //And specifically...
         names = new ArrayList<>();
         ExtensionList.lookup(GitHubRepositoryNameContributor.class).get(GitHubSCMSourceRepositoryNameContributor.class).parseAssociatedNames(job, names);
-        assertThat(names, Matchers.<GitHubRepositoryName>empty());
+        assertThat(names, Matchers.empty());
     }
 
     @Test
@@ -197,11 +174,11 @@ public class GitHubSCMSourceTest {
     public void testGitHubRepositoryNameContributor_When_not_MultiBranch() throws IOException {
         FreeStyleProject job = r.createProject(FreeStyleProject.class);
         Collection<GitHubRepositoryName> names = GitHubRepositoryNameContributor.parseAssociatedNames((Item) job);
-        assertThat(names, Matchers.<GitHubRepositoryName>empty());
+        assertThat(names, Matchers.empty());
         //And specifically...
         names = new ArrayList<>();
         ExtensionList.lookup(GitHubRepositoryNameContributor.class).get(GitHubSCMSourceRepositoryNameContributor.class).parseAssociatedNames((Item) job, names);
-        assertThat(names, Matchers.<GitHubRepositoryName>empty());
+        assertThat(names, Matchers.empty());
     }
 
     @Test
@@ -219,12 +196,38 @@ public class GitHubSCMSourceTest {
             byName.put(h.getKey().getName(), h.getKey());
             revByName.put(h.getKey().getName(), h.getValue());
         }
-        assertThat(byName.keySet(), containsInAnyOrder("PR-2", "master", "stephenc-patch-1"));
+        assertThat(byName.keySet(), containsInAnyOrder("PR-2", "PR-3", "PR-4", "master", "stephenc-patch-1"));
+
         assertThat(byName.get("PR-2"), instanceOf(PullRequestSCMHead.class));
-        assertThat(revByName.get("PR-2"), is((SCMRevision) new PullRequestSCMRevision((PullRequestSCMHead)(byName.get("PR-2")),
+        assertThat(((PullRequestSCMHead)byName.get("PR-2")).isMerge(), is(true));
+        assertThat(revByName.get("PR-2"), is(new PullRequestSCMRevision((PullRequestSCMHead)(byName.get("PR-2")),
                 "8f1314fc3c8284d8c6d5886d473db98f2126071c",
-                "c0e024f89969b976da165eecaa71e09dc60c3da1"
+                "c0e024f89969b976da165eecaa71e09dc60c3da1",
+                "38814ca33833ff5583624c29f305be9133f27a40"
         )));
+        ((PullRequestSCMRevision)revByName.get("PR-2")).validateMergeHash();
+
+        assertThat(byName.get("PR-3"), instanceOf(PullRequestSCMHead.class));
+        assertThat(((SCMHeadOrigin.Fork) byName.get("PR-3").getOrigin()).getName(), is("stephenc"));
+        assertThat(((PullRequestSCMHead)byName.get("PR-3")).isMerge(), is(true));
+        assertThat(revByName.get("PR-3"), is(new PullRequestSCMRevision((PullRequestSCMHead)(byName.get("PR-3")),
+                "8f1314fc3c8284d8c6d5886d473db98f2126071c",
+                "c0e024f89969b976da165eecaa71e09dc60c3da1",
+                PullRequestSCMRevision.NOT_MERGEABLE_HASH
+        )));
+
+        // validation should fail for this PR.
+        Exception abort = null;
+        try {
+            ((PullRequestSCMRevision)revByName.get("PR-3")).validateMergeHash();
+        } catch (Exception e) {
+            abort = e;
+        }
+        assertThat(abort, instanceOf(AbortException.class));
+        assertThat(abort.getMessage(), containsString("Not mergeable"));
+
+        assertThat(byName.get("PR-4"), instanceOf(PullRequestSCMHead.class));
+        assertThat(((SCMHeadOrigin.Fork) byName.get("PR-4").getOrigin()).getName(), is("stephenc/jenkins-58450"));
 
         assertThat(byName.get("master"), instanceOf(BranchSCMHead.class));
         assertThat(revByName.get("master"),
@@ -236,6 +239,349 @@ public class GitHubSCMSourceTest {
                 ));
     }
 
+    @Test
+    public void fetchSmokes_badMergeCommit() throws Exception {
+        // make it so the merge commit is not found returns 404
+        // Causes PR 2 to fall back to null merge_commit_sha
+
+        githubApi.stubFor(
+            get(urlEqualTo("/repos/cloudbeers/yolo/commits/38814ca33833ff5583624c29f305be9133f27a40"))
+            .inScenario("PR 2 Merge 404")
+            .whenScenarioStateIs(Scenario.STARTED)
+            .willReturn(
+                aResponse()
+                .withStatus(404)
+                .withHeader("Content-Type", "application/json; charset=utf-8")
+                .withBodyFile("body-heads-master-notfound.json"))
+            .willSetStateTo(Scenario.STARTED));
+
+        SCMHeadObserver.Collector collector = SCMHeadObserver.collect();
+        source.fetch(new SCMSourceCriteria() {
+            @Override
+            public boolean isHead(@NonNull Probe probe, @NonNull TaskListener listener) throws IOException {
+                return probe.stat("README.md").getType() == SCMFile.Type.REGULAR_FILE;
+            }
+        }, collector, null, null);
+        Map<String,SCMHead> byName = new HashMap<>();
+        Map<String,SCMRevision> revByName = new HashMap<>();
+        for (Map.Entry<SCMHead, SCMRevision> h: collector.result().entrySet())  {
+            byName.put(h.getKey().getName(), h.getKey());
+            revByName.put(h.getKey().getName(), h.getValue());
+        }
+
+        assertThat(byName.keySet(), containsInAnyOrder("PR-2", "PR-3", "PR-4", "master", "stephenc-patch-1"));
+
+        assertThat(byName.get("PR-2"), instanceOf(PullRequestSCMHead.class));
+        assertThat(((PullRequestSCMHead)byName.get("PR-2")).isMerge(), is(true));
+        assertThat(revByName.get("PR-2"), is(new PullRequestSCMRevision((PullRequestSCMHead)(byName.get("PR-2")),
+                "8f1314fc3c8284d8c6d5886d473db98f2126071c",
+                "c0e024f89969b976da165eecaa71e09dc60c3da1",
+                null
+        )));
+        ((PullRequestSCMRevision)revByName.get("PR-2")).validateMergeHash();
+
+        assertThat(byName.get("PR-3"), instanceOf(PullRequestSCMHead.class));
+        assertThat(((PullRequestSCMHead)byName.get("PR-3")).isMerge(), is(true));
+        assertThat(((SCMHeadOrigin.Fork) byName.get("PR-3").getOrigin()).getName(), is("stephenc"));
+        assertThat(revByName.get("PR-3"), is(new PullRequestSCMRevision((PullRequestSCMHead)(byName.get("PR-3")),
+                "8f1314fc3c8284d8c6d5886d473db98f2126071c",
+                "c0e024f89969b976da165eecaa71e09dc60c3da1",
+                PullRequestSCMRevision.NOT_MERGEABLE_HASH
+        )));
+
+        // validation should fail for this PR.
+        Exception abort = null;
+        try {
+            ((PullRequestSCMRevision)revByName.get("PR-3")).validateMergeHash();
+        } catch (Exception e) {
+            abort = e;
+        }
+        assertThat(abort, instanceOf(AbortException.class));
+        assertThat(abort.getMessage(), containsString("Not mergeable"));
+
+        assertThat(byName.get("PR-4"), instanceOf(PullRequestSCMHead.class));
+        assertThat(((SCMHeadOrigin.Fork) byName.get("PR-4").getOrigin()).getName(), is("stephenc/jenkins-58450"));
+
+        assertThat(byName.get("master"), instanceOf(BranchSCMHead.class));
+        assertThat(revByName.get("master"),
+                hasProperty("hash", is("8f1314fc3c8284d8c6d5886d473db98f2126071c")
+                ));
+        assertThat(byName.get("stephenc-patch-1"), instanceOf(BranchSCMHead.class));
+        assertThat(revByName.get("stephenc-patch-1"),
+                hasProperty("hash", is("095e69602bb95a278505e937e41d505ac3cdd263")
+                ));
+    }
+
+    @Test
+    public void fetchSmokes_badUser() throws Exception {
+        // make it so PR-2 returns a file not found for user
+        githubApi.stubFor(
+            get(urlMatching("(/api/v3)?/repos/cloudbeers/yolo/pulls/2"))
+            .inScenario("Pull Request Merge Hash")
+            .whenScenarioStateIs(Scenario.STARTED)
+            .willReturn(
+                aResponse()
+                .withHeader("Content-Type", "application/json; charset=utf-8")
+                .withBodyFile("body-yolo-pulls-2-bad-user.json")));
+        githubApi.stubFor(
+            get(urlMatching("(/api/v3)?/repos/cloudbeers/yolo/pulls\\?state=open"))
+            .inScenario("Pull Request Merge Hash")
+            .whenScenarioStateIs(Scenario.STARTED)
+            .willReturn(
+                aResponse()
+                .withHeader("Content-Type", "application/json; charset=utf-8")
+                .withBodyFile("body-yolo-pulls-bad-user.json")));
+
+        SCMHeadObserver.Collector collector = SCMHeadObserver.collect();
+        source.fetch(new SCMSourceCriteria() {
+            @Override
+            public boolean isHead(@NonNull Probe probe, @NonNull TaskListener listener) throws IOException {
+                return probe.stat("README.md").getType() == SCMFile.Type.REGULAR_FILE;
+            }
+        }, collector, null, null);
+        Map<String,SCMHead> byName = new HashMap<>();
+        Map<String,SCMRevision> revByName = new HashMap<>();
+        for (Map.Entry<SCMHead, SCMRevision> h: collector.result().entrySet())  {
+            byName.put(h.getKey().getName(), h.getKey());
+            revByName.put(h.getKey().getName(), h.getValue());
+        }
+        assertThat(byName.keySet(), containsInAnyOrder("PR-3", "PR-4", "master", "stephenc-patch-1"));
+
+        // PR-2 fails to find user and throws file not found for user.
+        // Caught and handled by removing PR-2 but scan continues.
+
+        assertThat(byName.get("PR-3"), instanceOf(PullRequestSCMHead.class));
+        assertThat(((SCMHeadOrigin.Fork) byName.get("PR-3").getOrigin()).getName(), is("stephenc"));
+        assertThat(((PullRequestSCMHead)byName.get("PR-3")).isMerge(), is(true));
+        assertThat(revByName.get("PR-3"), is(new PullRequestSCMRevision((PullRequestSCMHead)(byName.get("PR-3")),
+                "8f1314fc3c8284d8c6d5886d473db98f2126071c",
+                "c0e024f89969b976da165eecaa71e09dc60c3da1",
+                PullRequestSCMRevision.NOT_MERGEABLE_HASH
+        )));
+
+        // validation should fail for this PR.
+        Exception abort = null;
+        try {
+            ((PullRequestSCMRevision)revByName.get("PR-3")).validateMergeHash();
+        } catch (Exception e) {
+            abort = e;
+        }
+        assertThat(abort, instanceOf(AbortException.class));
+        assertThat(abort.getMessage(), containsString("Not mergeable"));
+
+        assertThat(byName.get("PR-4"), instanceOf(PullRequestSCMHead.class));
+        assertThat(((SCMHeadOrigin.Fork) byName.get("PR-4").getOrigin()).getName(), is("stephenc/jenkins-58450"));
+
+        assertThat(byName.get("master"), instanceOf(BranchSCMHead.class));
+        assertThat(revByName.get("master"),
+                hasProperty("hash", is("8f1314fc3c8284d8c6d5886d473db98f2126071c")
+                ));
+        assertThat(byName.get("stephenc-patch-1"), instanceOf(BranchSCMHead.class));
+        assertThat(revByName.get("stephenc-patch-1"),
+                hasProperty("hash", is("095e69602bb95a278505e937e41d505ac3cdd263")
+                ));
+    }
+
+    @Test
+    public void fetchSmokes_badTarget() throws Exception {
+        // make it so the merge commit is not found returns 404
+        // Causes PR 2 to fall back to null merge_commit_sha
+        // Then make it so refs/heads/master returns 404 for first call
+        // Causes PR 2 to fail because it cannot determine base commit.
+        githubApi.stubFor(
+            get(urlMatching("(/api/v3)?/repos/cloudbeers/yolo/commits/38814ca33833ff5583624c29f305be9133f27a40"))
+            .inScenario("PR 2 Merge 404")
+            .whenScenarioStateIs(Scenario.STARTED)
+            .willReturn(
+                aResponse()
+                .withStatus(404)
+                .withHeader("Content-Type", "application/json; charset=utf-8")
+                .withBodyFile("body-heads-master-notfound.json"))
+            .willSetStateTo(Scenario.STARTED));
+
+        githubApi.stubFor(
+            get(urlMatching("(/api/v3)?/repos/cloudbeers/yolo/git/refs/heads/master"))
+            .inScenario("PR 2 Master 404")
+            .whenScenarioStateIs(Scenario.STARTED)
+            .willReturn(
+                aResponse()
+                .withStatus(404)
+                .withHeader("Content-Type", "application/json; charset=utf-8")
+                .withBodyFile("body-heads-master-notfound.json"))
+            .willSetStateTo("Master 200"));
+
+        githubApi.stubFor(
+            get(urlMatching("(/api/v3)?/repos/cloudbeers/yolo/git/refs/heads/master"))
+            .inScenario("PR 2 Master 404")
+            .whenScenarioStateIs("Master 200")
+            .willReturn(
+                aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json; charset=utf-8")
+                .withBodyFile("body-heads-master.json"))
+            .willSetStateTo("Master 200"));
+
+
+        SCMHeadObserver.Collector collector = SCMHeadObserver.collect();
+        source.fetch(new SCMSourceCriteria() {
+            @Override
+            public boolean isHead(@NonNull Probe probe, @NonNull TaskListener listener) throws IOException {
+                return probe.stat("README.md").getType() == SCMFile.Type.REGULAR_FILE;
+            }
+        }, collector, null, null);
+        Map<String,SCMHead> byName = new HashMap<>();
+        Map<String,SCMRevision> revByName = new HashMap<>();
+        for (Map.Entry<SCMHead, SCMRevision> h: collector.result().entrySet())  {
+            byName.put(h.getKey().getName(), h.getKey());
+            revByName.put(h.getKey().getName(), h.getValue());
+        }
+        assertThat(byName.keySet(), containsInAnyOrder("PR-3", "PR-4", "master", "stephenc-patch-1"));
+
+        // PR-2 fails to find master and throws file not found for master.
+        // Caught and handled by removing PR-2 but scan continues.
+
+        assertThat(byName.get("PR-3"), instanceOf(PullRequestSCMHead.class));
+        assertThat(((SCMHeadOrigin.Fork) byName.get("PR-3").getOrigin()).getName(), is("stephenc"));
+        assertThat(((PullRequestSCMHead)byName.get("PR-3")).isMerge(), is(true));
+        assertThat(revByName.get("PR-3"), is(new PullRequestSCMRevision((PullRequestSCMHead)(byName.get("PR-3")),
+                "8f1314fc3c8284d8c6d5886d473db98f2126071c",
+                "c0e024f89969b976da165eecaa71e09dc60c3da1",
+                PullRequestSCMRevision.NOT_MERGEABLE_HASH
+        )));
+
+        // validation should fail for this PR.
+        Exception abort = null;
+        try {
+            ((PullRequestSCMRevision)revByName.get("PR-3")).validateMergeHash();
+        } catch (Exception e) {
+            abort = e;
+        }
+        assertThat(abort, instanceOf(AbortException.class));
+        assertThat(abort.getMessage(), containsString("Not mergeable"));
+
+        assertThat(byName.get("PR-4"), instanceOf(PullRequestSCMHead.class));
+        assertThat(((SCMHeadOrigin.Fork) byName.get("PR-4").getOrigin()).getName(), is("stephenc/jenkins-58450"));
+
+        assertThat(byName.get("master"), instanceOf(BranchSCMHead.class));
+        assertThat(revByName.get("master"),
+                hasProperty("hash", is("8f1314fc3c8284d8c6d5886d473db98f2126071c")
+                ));
+        assertThat(byName.get("stephenc-patch-1"), instanceOf(BranchSCMHead.class));
+        assertThat(revByName.get("stephenc-patch-1"),
+                hasProperty("hash", is("095e69602bb95a278505e937e41d505ac3cdd263")
+                ));
+    }
+
+    @Test
+    public void fetchSmokesUnknownMergeable() throws Exception {
+        // make it so PR-2 always returns mergeable = null
+        githubApi.stubFor(
+            get(urlEqualTo("/repos/cloudbeers/yolo/pulls/2"))
+            .inScenario("Pull Request Merge Hash")
+            .whenScenarioStateIs(Scenario.STARTED)
+            .willReturn(
+                aResponse()
+                .withHeader("Content-Type", "application/json; charset=utf-8")
+                .withBodyFile("body-yolo-pulls-2-mergeable-null.json")));
+
+        SCMHeadObserver.Collector collector = SCMHeadObserver.collect();
+        source.fetch(new SCMSourceCriteria() {
+            @Override
+            public boolean isHead(@NonNull Probe probe, @NonNull TaskListener listener) throws IOException {
+                return probe.stat("README.md").getType() == SCMFile.Type.REGULAR_FILE;
+            }
+        }, collector, null, null);
+        Map<String,SCMHead> byName = new HashMap<>();
+        Map<String,SCMRevision> revByName = new HashMap<>();
+        for (Map.Entry<SCMHead, SCMRevision> h: collector.result().entrySet())  {
+            byName.put(h.getKey().getName(), h.getKey());
+            revByName.put(h.getKey().getName(), h.getValue());
+        }
+
+        assertThat(byName.keySet(), containsInAnyOrder("PR-2", "PR-3", "PR-4", "master", "stephenc-patch-1"));
+
+        assertThat(byName.get("PR-2"), instanceOf(PullRequestSCMHead.class));
+        assertThat(((PullRequestSCMHead)byName.get("PR-2")).isMerge(), is(true));
+        assertThat(revByName.get("PR-2"), is(new PullRequestSCMRevision((PullRequestSCMHead)(byName.get("PR-2")),
+                "8f1314fc3c8284d8c6d5886d473db98f2126071c",
+                "c0e024f89969b976da165eecaa71e09dc60c3da1",
+                null
+        )));
+        ((PullRequestSCMRevision)revByName.get("PR-2")).validateMergeHash();
+
+        assertThat(byName.get("PR-3"), instanceOf(PullRequestSCMHead.class));
+        assertThat(((SCMHeadOrigin.Fork) byName.get("PR-3").getOrigin()).getName(), is("stephenc"));
+        assertThat(((PullRequestSCMHead)byName.get("PR-3")).isMerge(), is(true));
+        assertThat(revByName.get("PR-3"), is(new PullRequestSCMRevision((PullRequestSCMHead)(byName.get("PR-3")),
+                "8f1314fc3c8284d8c6d5886d473db98f2126071c",
+                "c0e024f89969b976da165eecaa71e09dc60c3da1",
+                PullRequestSCMRevision.NOT_MERGEABLE_HASH
+        )));
+
+        // validation should fail for this PR.
+        Exception abort = null;
+        try {
+            ((PullRequestSCMRevision)revByName.get("PR-3")).validateMergeHash();
+        } catch (Exception e) {
+            abort = e;
+        }
+        assertThat(abort, instanceOf(AbortException.class));
+        assertThat(abort.getMessage(), containsString("Not mergeable"));
+
+        assertThat(byName.get("PR-4"), instanceOf(PullRequestSCMHead.class));
+        assertThat(((SCMHeadOrigin.Fork) byName.get("PR-4").getOrigin()).getName(), is("stephenc/jenkins-58450"));
+
+        assertThat(byName.get("master"), instanceOf(BranchSCMHead.class));
+        assertThat(revByName.get("master"),
+                hasProperty("hash", is("8f1314fc3c8284d8c6d5886d473db98f2126071c")
+                ));
+        assertThat(byName.get("stephenc-patch-1"), instanceOf(BranchSCMHead.class));
+        assertThat(revByName.get("stephenc-patch-1"),
+                hasProperty("hash", is("095e69602bb95a278505e937e41d505ac3cdd263")
+                ));
+
+    }
+
+    @Test
+    public void fetchSmokesUnknownFork() throws Exception {
+        // make it so PR-2 always returns mergeable = null
+        githubApi.stubFor(
+                get(urlEqualTo("/repos/cloudbeers/yolo/pulls/4"))
+                        .inScenario("Pull Request from Deleted Fork")
+                        .whenScenarioStateIs(Scenario.STARTED)
+                        .willReturn(
+                                aResponse()
+                                        .withHeader("Content-Type", "application/json; charset=utf-8")
+                                        .withBodyFile("body-yolo-pulls-4-deleted-fork.json")));
+        githubApi.stubFor(
+                get(urlMatching("(/api/v3)?/repos/cloudbeers/yolo/pulls\\?state=open"))
+                        .inScenario("Pull Request from Deleted Fork")
+                        .whenScenarioStateIs(Scenario.STARTED)
+                        .willReturn(
+                                aResponse()
+                                        .withHeader("Content-Type", "application/json; charset=utf-8")
+                                        .withBodyFile("body-yolo-pulls-deleted-fork.json")));
+
+        SCMHeadObserver.Collector collector = SCMHeadObserver.collect();
+        source.fetch(new SCMSourceCriteria() {
+            @Override
+            public boolean isHead(@NonNull Probe probe, @NonNull TaskListener listener) throws IOException {
+                return probe.stat("README.md").getType() == SCMFile.Type.REGULAR_FILE;
+            }
+        }, collector, null, null);
+        Map<String,SCMHead> byName = new HashMap<>();
+        Map<String,SCMRevision> revByName = new HashMap<>();
+        for (Map.Entry<SCMHead, SCMRevision> h: collector.result().entrySet())  {
+            byName.put(h.getKey().getName(), h.getKey());
+            revByName.put(h.getKey().getName(), h.getValue());
+        }
+
+        assertThat(byName.keySet(), hasItem("PR-4"));
+
+        assertThat(byName.get("PR-4"), instanceOf(PullRequestSCMHead.class));
+        assertThat(((SCMHeadOrigin.Fork) byName.get("PR-4").getOrigin()).getName(), nullValue());
+    }
+    
     @Test
     public void fetchAltConfig() throws Exception {
         source.setBuildForkPRMerge(false);
@@ -255,12 +601,25 @@ public class GitHubSCMSourceTest {
             byName.put(h.getKey().getName(), h.getKey());
             revByName.put(h.getKey().getName(), h.getValue());
         }
-        assertThat(byName.keySet(), containsInAnyOrder("PR-2", "master", "stephenc-patch-1"));
+        assertThat(byName.keySet(), containsInAnyOrder("PR-2", "PR-3", "PR-4", "master", "stephenc-patch-1"));
         assertThat(byName.get("PR-2"), instanceOf(PullRequestSCMHead.class));
-        assertThat(revByName.get("PR-2"), is((SCMRevision) new PullRequestSCMRevision((PullRequestSCMHead)(byName.get("PR-2")),
+        assertThat(((PullRequestSCMHead)byName.get("PR-2")).isMerge(), is(false));
+        assertThat(revByName.get("PR-2"), is(new PullRequestSCMRevision((PullRequestSCMHead)(byName.get("PR-2")),
                 "8f1314fc3c8284d8c6d5886d473db98f2126071c",
                 "c0e024f89969b976da165eecaa71e09dc60c3da1"
         )));
+        ((PullRequestSCMRevision)revByName.get("PR-2")).validateMergeHash();
+
+        assertThat(byName.get("PR-3"), instanceOf(PullRequestSCMHead.class));
+        assertThat(((SCMHeadOrigin.Fork) byName.get("PR-3").getOrigin()).getName(), is("stephenc"));
+        assertThat(((PullRequestSCMHead)byName.get("PR-3")).isMerge(), is(false));
+        assertThat(revByName.get("PR-3"), is(new PullRequestSCMRevision((PullRequestSCMHead)(byName.get("PR-3")),
+                "8f1314fc3c8284d8c6d5886d473db98f2126071c",
+                "c0e024f89969b976da165eecaa71e09dc60c3da1"
+        )));
+
+        assertThat(byName.get("PR-4"), instanceOf(PullRequestSCMHead.class));
+        assertThat(((SCMHeadOrigin.Fork) byName.get("PR-4").getOrigin()).getName(), is("stephenc/jenkins-58450"));
 
         assertThat(byName.get("master"), instanceOf(BranchSCMHead.class));
         assertThat(revByName.get("master"),
@@ -274,22 +633,22 @@ public class GitHubSCMSourceTest {
 
     @Test
     public void fetchActions() throws Exception {
-        assertThat(source.fetchActions(null, null), Matchers.<Action>containsInAnyOrder(
-                Matchers.<Action>is(
+        assertThat(source.fetchActions(null, null), Matchers.containsInAnyOrder(
+                Matchers.is(
                         new ObjectMetadataAction(null, "You only live once", "http://yolo.example.com")
                 ),
-                Matchers.<Action>is(
+                Matchers.is(
                         new GitHubDefaultBranch("cloudbeers", "yolo", "master")
                 ),
                 instanceOf(GitHubRepoMetadataAction.class),
-                Matchers.<Action>is(new GitHubLink("icon-github-repo", "https://github.com/cloudbeers/yolo"))));
+                Matchers.is(new GitHubLink("icon-github-repo", "https://github.com/cloudbeers/yolo"))));
     }
 
     @Test
     public void getTrustedRevisionReturnsRevisionIfRepoOwnerAndPullRequestBranchOwnerAreSameWithDifferentCase() throws Exception {
         source.setBuildOriginPRHead(true);
         PullRequestSCMRevision revision = createRevision("CloudBeers");
-        assertThat(source.getTrustedRevision(revision, new LogTaskListener(Logger.getAnonymousLogger(), Level.INFO)), sameInstance((SCMRevision) revision));
+        assertThat(source.getTrustedRevision(revision, new LogTaskListener(Logger.getAnonymousLogger(), Level.INFO)), sameInstance(revision));
     }
 
     private PullRequestSCMRevision createRevision(String sourceOwner) {
@@ -312,52 +671,39 @@ public class GitHubSCMSourceTest {
             mockStrategy.grant(Item.CONFIGURE).onItems(dummy).to("bob");
             mockStrategy.grant(Item.EXTENDED_READ).onItems(dummy).to("jim");
             r.jenkins.setAuthorizationStrategy(mockStrategy);
-            ACL.impersonate(User.get("admin").impersonate(), new Runnable() {
-                @Override
-                public void run() {
-                    ListBoxModel rsp = d.doFillCredentialsIdItems(dummy, "", "does-not-exist");
-                    assertThat("Expecting only the provided value so that form config unchanged", rsp, hasSize(1));
-                    assertThat("Expecting only the provided value so that form config unchanged", rsp.get(0).value,
-                            Matchers.is("does-not-exist"));
-                    rsp = d.doFillCredentialsIdItems(null, "", "does-not-exist");
-                    assertThat("Expecting just the empty entry", rsp, hasSize(1));
-                    assertThat("Expecting just the empty entry", rsp.get(0).value, Matchers.is(""));
-                }
-            });
-            ACL.impersonate(User.get("bob").impersonate(), new Runnable() {
-                @Override
-                public void run() {
-                    ListBoxModel rsp = d.doFillCredentialsIdItems(dummy, "", "does-not-exist");
-                    assertThat("Expecting just the empty entry", rsp, hasSize(1));
-                    assertThat("Expecting just the empty entry", rsp.get(0).value, Matchers.is(""));
-                    rsp = d.doFillCredentialsIdItems(null, "", "does-not-exist");
-                    assertThat("Expecting only the provided value so that form config unchanged", rsp, hasSize(1));
-                    assertThat("Expecting only the provided value so that form config unchanged", rsp.get(0).value,
-                            Matchers.is("does-not-exist"));
-                }
-            });
-            ACL.impersonate(User.get("jim").impersonate(), new Runnable() {
-                @Override
-                public void run() {
-                    ListBoxModel rsp = d.doFillCredentialsIdItems(dummy, "", "does-not-exist");
-                    assertThat("Expecting just the empty entry", rsp, hasSize(1));
-                    assertThat("Expecting just the empty entry", rsp.get(0).value, Matchers.is(""));
-                }
-            });
-            ACL.impersonate(User.get("sue").impersonate(), new Runnable() {
-                @Override
-                public void run() {
-                    ListBoxModel rsp = d.doFillCredentialsIdItems(dummy, "", "does-not-exist");
-                    assertThat("Expecting only the provided value so that form config unchanged", rsp, hasSize(1));
-                    assertThat("Expecting only the provided value so that form config unchanged", rsp.get(0).value,
-                            Matchers.is("does-not-exist"));
-                }
-            });
+            try (ACLContext ctx = ACL.as(User.getById("admin", true).impersonate())) {
+                ListBoxModel rsp = d.doFillCredentialsIdItems(dummy, "", "does-not-exist");
+                assertThat("Expecting only the provided value so that form config unchanged", rsp, hasSize(1));
+                assertThat("Expecting only the provided value so that form config unchanged", rsp.get(0).value,
+                        Matchers.is("does-not-exist"));
+                rsp = d.doFillCredentialsIdItems(null, "", "does-not-exist");
+                assertThat("Expecting just the empty entry", rsp, hasSize(1));
+                assertThat("Expecting just the empty entry", rsp.get(0).value, Matchers.is(""));
+            }
+            try (ACLContext ctx = ACL.as(User.getById("bob", true).impersonate())) {
+                ListBoxModel rsp = d.doFillCredentialsIdItems(dummy, "", "does-not-exist");
+                assertThat("Expecting just the empty entry", rsp, hasSize(1));
+                assertThat("Expecting just the empty entry", rsp.get(0).value, Matchers.is(""));
+                rsp = d.doFillCredentialsIdItems(null, "", "does-not-exist");
+                assertThat("Expecting only the provided value so that form config unchanged", rsp, hasSize(1));
+                assertThat("Expecting only the provided value so that form config unchanged", rsp.get(0).value,
+                        Matchers.is("does-not-exist"));
+            }
+            try (ACLContext ctx = ACL.as(User.getById("jim", true).impersonate())) {
+                ListBoxModel rsp = d.doFillCredentialsIdItems(dummy, "", "does-not-exist");
+                assertThat("Expecting just the empty entry", rsp, hasSize(1));
+                assertThat("Expecting just the empty entry", rsp.get(0).value, Matchers.is(""));
+            }
+            try (ACLContext ctx = ACL.as(User.getById("sue", true).impersonate())) {
+                ListBoxModel rsp = d.doFillCredentialsIdItems(dummy, "", "does-not-exist");
+                assertThat("Expecting only the provided value so that form config unchanged", rsp, hasSize(1));
+                assertThat("Expecting only the provided value so that form config unchanged", rsp.get(0).value,
+                        Matchers.is("does-not-exist"));
+            }
         } finally {
             r.jenkins.setSecurityRealm(realm);
             r.jenkins.setAuthorizationStrategy(strategy);
             r.jenkins.remove(dummy);
         }
     }
-
 }

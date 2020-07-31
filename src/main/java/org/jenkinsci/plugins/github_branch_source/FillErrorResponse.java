@@ -2,7 +2,6 @@ package org.jenkinsci.plugins.github_branch_source;
 
 import hudson.Util;
 import java.io.IOException;
-import java.util.Locale;
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServletResponse;
 import jenkins.model.Jenkins;
@@ -27,8 +26,8 @@ class FillErrorResponse extends IOException implements HttpResponse {
         rsp.setContentType("text/html;charset=UTF-8");
         rsp.setHeader("X-Jenkins-Select-Error", clearList ? "clear" : "retain");
         rsp.getWriter().print(
-                "<div class=\'error\'><img src=\'" + req.getContextPath()
-                        + Jenkins.RESOURCE_PATH + "/images/none.gif\' height=16 width=1>" + Util.escape(getMessage()) +
+                "<div class='error'><img src='" + req.getContextPath()
+                        + Jenkins.RESOURCE_PATH + "/images/none.gif' height=16 width=1>" + Util.escape(getMessage()) +
                         "</div>");
 
     }

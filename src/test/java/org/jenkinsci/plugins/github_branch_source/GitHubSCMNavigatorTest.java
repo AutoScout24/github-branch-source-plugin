@@ -25,167 +25,335 @@
 
 package org.jenkinsci.plugins.github_branch_source;
 
-import com.github.tomakehurst.wiremock.common.FileSource;
-import com.github.tomakehurst.wiremock.common.SingleRootFileSource;
-import com.github.tomakehurst.wiremock.core.WireMockConfiguration;
-import com.github.tomakehurst.wiremock.extension.Parameters;
-import com.github.tomakehurst.wiremock.extension.ResponseTransformer;
-import com.github.tomakehurst.wiremock.http.Request;
-import com.github.tomakehurst.wiremock.http.Response;
-import com.github.tomakehurst.wiremock.junit.WireMockRule;
+import com.cloudbees.plugins.credentials.Credentials;
+import com.cloudbees.plugins.credentials.CredentialsScope;
+import com.cloudbees.plugins.credentials.SystemCredentialsProvider;
+import com.cloudbees.plugins.credentials.domains.Domain;
+import com.cloudbees.plugins.credentials.impl.BaseStandardCredentials;
+import com.cloudbees.plugins.credentials.impl.UsernamePasswordCredentialsImpl;
 import edu.umd.cs.findbugs.annotations.NonNull;
 import edu.umd.cs.findbugs.annotations.Nullable;
-import hudson.model.Action;
 import hudson.model.Item;
 import hudson.model.TaskListener;
 import hudson.model.User;
 import hudson.security.ACL;
+import hudson.security.ACLContext;
 import hudson.security.AuthorizationStrategy;
 import hudson.security.SecurityRealm;
 import hudson.util.ListBoxModel;
 import hudson.util.LogTaskListener;
-import java.io.File;
-import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import jenkins.branch.OrganizationFolder;
 import jenkins.model.Jenkins;
-import jenkins.scm.api.SCMFile;
-import jenkins.scm.api.SCMHeadObserver;
 import jenkins.scm.api.SCMNavigatorOwner;
-import jenkins.scm.api.SCMSourceCriteria;
 import jenkins.scm.api.SCMSourceObserver;
 import jenkins.scm.api.SCMSourceOwner;
 import jenkins.scm.api.metadata.ObjectMetadataAction;
+import jenkins.scm.api.trait.SCMTrait;
 import jenkins.scm.impl.NoOpProjectObserver;
-import org.acegisecurity.context.SecurityContextHolder;
 import org.hamcrest.Matchers;
 import org.junit.Before;
-import org.junit.ClassRule;
-import org.junit.Rule;
 import org.junit.Test;
-import org.jvnet.hudson.test.JenkinsRule;
 import org.jvnet.hudson.test.MockAuthorizationStrategy;
 import org.jvnet.hudson.test.MockFolder;
+import org.mockito.Mock;
 import org.mockito.Mockito;
 
-import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
-import static com.github.tomakehurst.wiremock.client.WireMock.get;
-import static com.github.tomakehurst.wiremock.client.WireMock.urlMatching;
-import static org.hamcrest.Matchers.hasSize;
-import static org.hamcrest.Matchers.instanceOf;
-import static org.hamcrest.Matchers.is;
-import static org.junit.Assert.assertThat;
+import static org.hamcrest.Matchers.*;
 
-public class GitHubSCMNavigatorTest {
-    /**
-     * All tests in this class only use Jenkins for the extensions
-     */
-    @ClassRule
-    public static JenkinsRule r = new JenkinsRule();
+public class GitHubSCMNavigatorTest extends AbstractGitHubWireMockTest {
 
-    public static WireMockRuleFactory factory = new WireMockRuleFactory();
+    @Mock
+    private SCMSourceOwner scmSourceOwner;
 
-    @Rule
-    public WireMockRule githubRaw = factory.getRule(WireMockConfiguration.options()
-            .dynamicPort()
-            .usingFilesUnderClasspath("raw")
-    );
-    @Rule
-    public WireMockRule githubApi = factory.getRule(WireMockConfiguration.options()
-            .dynamicPort()
-            .usingFilesUnderClasspath("api")
-            .extensions(
-                    new ResponseTransformer() {
-                        @Override
-                        public Response transform(Request request, Response response, FileSource files,
-                                                  Parameters parameters) {
-                            if ("application/json"
-                                    .equals(response.getHeaders().getContentTypeHeader().mimeTypePart())) {
-                                return Response.Builder.like(response)
-                                        .but()
-                                        .body(response.getBodyAsString()
-                                                .replace("https://api.github.com/",
-                                                        "http://localhost:" + githubApi.port() + "/")
-                                                .replace("https://raw.githubusercontent.com/",
-                                                        "http://localhost:" + githubRaw.port() + "/")
-                                        )
-                                        .build();
-                            }
-                            return response;
-                        }
+    private BaseStandardCredentials credentials = new UsernamePasswordCredentialsImpl(
+            CredentialsScope.GLOBAL, "authenticated-user", null, "git-user", "git-secret");
 
-                        @Override
-                        public String getName() {
-                            return "url-rewrite";
-                        }
-
-                    })
-    );
     private GitHubSCMNavigator navigator;
 
     @Before
-    public void prepareMockGitHub() throws Exception {
-        new File("src/test/resources/api/mappings").mkdirs();
-        new File("src/test/resources/api/__files").mkdirs();
-        new File("src/test/resources/raw/mappings").mkdirs();
-        new File("src/test/resources/raw/__files").mkdirs();
-        githubApi.enableRecordMappings(new SingleRootFileSource("src/test/resources/api/mappings"),
-                new SingleRootFileSource("src/test/resources/api/__files"));
-        githubRaw.enableRecordMappings(new SingleRootFileSource("src/test/resources/raw/mappings"),
-                new SingleRootFileSource("src/test/resources/raw/__files"));
-        githubApi.stubFor(
-                get(urlMatching(".*")).atPriority(10).willReturn(aResponse().proxiedFrom("https://api.github.com/")));
-        githubRaw.stubFor(get(urlMatching(".*")).atPriority(10)
-                .willReturn(aResponse().proxiedFrom("https://raw.githubusercontent.com/")));
-        navigator = new GitHubSCMNavigator("http://localhost:" + githubApi.port(), "cloudbeers", null, null);
+    @Override
+    public void prepareMockGitHub() {
+        super.prepareMockGitHub();
+        setCredentials(Collections.emptyList());
+        navigator = navigatorForRepoOwner("cloudbeers", null);
+    }
+
+    private GitHubSCMNavigator navigatorForRepoOwner(String repoOwner, @Nullable String credentialsId) {
+        GitHubSCMNavigator navigator = new GitHubSCMNavigator(repoOwner);
+        navigator.setApiUri("http://localhost:" + githubApi.port());
+        navigator.setCredentialsId(credentialsId);
+        return navigator;
+    }
+
+    private void setCredentials(List<Credentials> credentials) {
+        SystemCredentialsProvider.getInstance().setDomainCredentialsMap(
+                Collections.singletonMap(Domain.global(), credentials));
     }
 
     @Test
     public void fetchSmokes() throws Exception {
-        final LogTaskListener listener = new LogTaskListener(Logger.getAnonymousLogger(), Level.INFO);
-        final Set<String> names = new HashSet<>();
-        final SCMSourceOwner owner = Mockito.mock(SCMSourceOwner.class);
-        SCMSourceObserver observer = new SCMSourceObserver() {
-            @NonNull
-            @Override
-            public SCMSourceOwner getContext() {
-                return owner;
-            }
+        final Set<String> projectNames = new HashSet<>();
+        final SCMSourceObserver observer = getObserver(projectNames);
 
-            @NonNull
-            @Override
-            public TaskListener getListener() {
-                return listener;
-            }
-
-            @NonNull
-            @Override
-            public ProjectObserver observe(@NonNull String projectName) throws IllegalArgumentException {
-                names.add(projectName);
-                return new NoOpProjectObserver();
-            }
-
-            @Override
-            public void addAttribute(@NonNull String key, @Nullable Object value)
-                    throws IllegalArgumentException, ClassCastException {
-
-            }
-        };
         navigator.visitSources(SCMSourceObserver.filter(observer, "yolo"));
-        assertThat(names, Matchers.contains("yolo"));
+
+        assertThat(projectNames, contains("yolo"));
+    }
+
+    @Test
+    public void fetchReposWithoutTeamSlug() throws Exception {
+        final Set<String> projectNames = new HashSet<>();
+        final SCMSourceObserver observer = getObserver(projectNames);
+
+        navigator.visitSources(SCMSourceObserver.filter(observer, "Hello-World", "github-branch-source-plugin", "unknown", "basic", "yolo", "yolo-archived"));
+
+        assertThat(projectNames, containsInAnyOrder("basic", "yolo", "yolo-archived"));
+    }
+
+    @Test
+    public void fetchReposFromTeamSlug() throws Exception {
+        final Set<String> projectNames = new HashSet<>();
+        final SCMSourceObserver observer = getObserver(projectNames);
+
+        List<SCMTrait<? extends SCMTrait<?>>> traits = new ArrayList<>(navigator.getTraits());
+        traits.add(new TeamSlugTrait("justice-league"));
+        navigator.setTraits(traits);
+        navigator.visitSources(SCMSourceObserver.filter(observer, "Hello-World", "github-branch-source-plugin", "unknown", "basic", "yolo", "yolo-archived"));
+
+        assertThat(projectNames, containsInAnyOrder("Hello-World", "github-branch-source-plugin", "basic", "yolo-archived"));
+    }
+
+    @Test
+    public void fetchOneRepoWithTeamSlug_InTeam() throws Exception {
+        final Set<String> projectNames = new HashSet<>();
+        final SCMSourceObserver observer = getObserver(projectNames);
+
+        List<SCMTrait<? extends SCMTrait<?>>> traits = new ArrayList<>(navigator.getTraits());
+        traits.add(new TeamSlugTrait("justice-league"));
+        navigator.setTraits(traits);
+        navigator.visitSources(SCMSourceObserver.filter(observer,   "yolo-archived"));
+
+        assertThat(projectNames, containsInAnyOrder( "yolo-archived"));
+    }
+
+    @Test
+    public void fetchOneRepoWithTeamSlug_NotInTeam() throws Exception {
+        final Set<String> projectNames = new HashSet<>();
+        final SCMSourceObserver observer = getObserver(projectNames);
+
+        List<SCMTrait<? extends SCMTrait<?>>> traits = new ArrayList<>(navigator.getTraits());
+        traits.add(new TeamSlugTrait("justice-league"));
+        navigator.setTraits(traits);
+        navigator.visitSources(SCMSourceObserver.filter(observer, "yolo"));
+
+        assertThat(projectNames,  empty());
+    }
+
+
+    @Test
+    public void fetchOneRepo_BelongingToAuthenticatedUser() throws Exception {
+        setCredentials(Collections.singletonList(credentials));
+        navigator = navigatorForRepoOwner("stephenc", credentials.getId());
+        final Set<String> projectNames = new HashSet<>();
+        final SCMSourceObserver observer = getObserver(projectNames);
+
+        navigator.visitSources(SCMSourceObserver.filter(observer, "yolo-archived"));
+
+        assertThat(projectNames, containsInAnyOrder("yolo-archived"));
+    }
+
+    @Test
+    public void fetchRepos_BelongingToAuthenticatedUser_FilteredByTopic() throws Exception {
+        setCredentials(Collections.singletonList(credentials));
+        navigator = navigatorForRepoOwner("stephenc", credentials.getId());
+        navigator.setTraits(Collections.singletonList(new TopicsTrait("awesome")));
+        final Set<String> projectNames = new HashSet<>();
+        final SCMSourceObserver observer = getObserver(projectNames);
+
+        navigator.visitSources(observer);
+
+        assertEquals(projectNames, Collections.singleton("yolo"));
+    }
+
+    @Test
+    public void fetchRepos_BelongingToAuthenticatedUser_FilteredByTopic_RemovesAll() throws Exception {
+        setCredentials(Collections.singletonList(credentials));
+        navigator = navigatorForRepoOwner("stephenc", credentials.getId());
+        navigator.setTraits(Collections.singletonList(new TopicsTrait("nope")));
+        final Set<String> projectNames = new HashSet<>();
+        final SCMSourceObserver observer = getObserver(projectNames);
+
+        navigator.visitSources(observer);
+
+        assertEquals(projectNames, Collections.emptySet());
+    }
+
+    @Test
+    public void fetchRepos_BelongingToAuthenticatedUser_FilteredByMultipleTopics() throws Exception {
+        setCredentials(Collections.singletonList(credentials));
+        navigator = navigatorForRepoOwner("stephenc", credentials.getId());
+        navigator.setTraits(Collections.singletonList(new TopicsTrait("cool, great,was-awesome")));
+        final Set<String> projectNames = new HashSet<>();
+        final SCMSourceObserver observer = getObserver(projectNames);
+
+        navigator.visitSources(observer);
+
+        assertEquals(projectNames, Collections.singleton("yolo-archived"));
+    }
+
+    @Test
+    public void fetchOneRepo_BelongingToAuthenticatedUser_ExcludingArchived() throws Exception {
+        setCredentials(Collections.singletonList(credentials));
+        navigator = navigatorForRepoOwner("stephenc", credentials.getId());
+        navigator.setTraits(Collections.singletonList(new ExcludeArchivedRepositoriesTrait()));
+        final Set<String> projectNames = new HashSet<>();
+        final SCMSourceObserver observer = getObserver(projectNames);
+
+        navigator.visitSources(SCMSourceObserver.filter(observer, "yolo-archived"));
+
+        assertThat(projectNames, empty());
+    }
+
+    @Test
+    public void fetchOneRepo_BelongingToOrg() throws Exception {
+        final Set<String> projectNames = new HashSet<>();
+        final SCMSourceObserver observer = getObserver(projectNames);
+
+        navigator.visitSources(SCMSourceObserver.filter(observer, "yolo-archived"));
+
+        assertThat(projectNames, containsInAnyOrder("yolo-archived"));
+    }
+
+    @Test
+    public void fetchOneRepo_BelongingToOrg_ExcludingArchived() throws Exception {
+        navigator.setTraits(Collections.singletonList(new ExcludeArchivedRepositoriesTrait()));
+        final Set<String> projectNames = new HashSet<>();
+        final SCMSourceObserver observer = getObserver(projectNames);
+
+        navigator.visitSources(SCMSourceObserver.filter(observer, "yolo-archived"));
+
+        assertThat(projectNames, empty());
+    }
+
+    @Test
+    public void fetchOneRepo_BelongingToUser() throws Exception {
+        navigator = navigatorForRepoOwner("stephenc", null);
+        final Set<String> projectNames = new HashSet<>();
+        final SCMSourceObserver observer = getObserver(projectNames);
+
+        navigator.visitSources(SCMSourceObserver.filter(observer, "yolo-archived"));
+
+        assertThat(projectNames, containsInAnyOrder("yolo-archived"));
+    }
+
+    @Test
+    public void fetchOneRepo_BelongingToUser_ExcludingArchived() throws Exception {
+        navigator = navigatorForRepoOwner("stephenc", null);
+        navigator.setTraits(Collections.singletonList(new ExcludeArchivedRepositoriesTrait()));
+        final Set<String> projectNames = new HashSet<>();
+        final SCMSourceObserver observer = getObserver(projectNames);
+
+        navigator.visitSources(SCMSourceObserver.filter(observer, "yolo-archived"));
+
+        assertThat(projectNames, empty());
+    }
+
+    @Test
+    public void fetchRepos_BelongingToAuthenticatedUser() throws Exception {
+        setCredentials(Collections.singletonList(credentials));
+        navigator = navigatorForRepoOwner("stephenc", credentials.getId());
+        final Set<String> projectNames = new HashSet<>();
+        final SCMSourceObserver observer = getObserver(projectNames);
+
+        navigator.visitSources(observer);
+
+        assertThat(projectNames, containsInAnyOrder("yolo", "yolo-archived"));
+    }
+
+    @Test
+    public void fetchRepos_BelongingToAuthenticatedUser_ExcludingArchived() throws Exception {
+        setCredentials(Collections.singletonList(credentials));
+        navigator = navigatorForRepoOwner("stephenc", credentials.getId());
+        navigator.setTraits(Collections.singletonList(new ExcludeArchivedRepositoriesTrait()));
+        final Set<String> projectNames = new HashSet<>();
+        final SCMSourceObserver observer = getObserver(projectNames);
+
+        navigator.visitSources(observer);
+
+        assertThat(projectNames, containsInAnyOrder("yolo"));
+    }
+
+    @Test
+    public void fetchRepos_BelongingToOrg() throws Exception {
+        final Set<String> projectNames = new HashSet<>();
+        final SCMSourceObserver observer = getObserver(projectNames);
+
+        navigator.visitSources(
+                SCMSourceObserver.filter(observer, "unknown", "basic", "yolo", "yolo-archived"));
+
+        assertThat(projectNames, containsInAnyOrder("basic", "yolo", "yolo-archived"));
+    }
+
+    @Test
+    public void fetchRepos_BelongingToOrg_ExcludingArchived() throws Exception {
+        navigator.setTraits(Collections.singletonList(new ExcludeArchivedRepositoriesTrait()));
+        final Set<String> projectNames = new HashSet<>();
+        final SCMSourceObserver observer = getObserver(projectNames);
+
+        navigator.visitSources(
+                SCMSourceObserver.filter(observer, "unknown", "basic", "yolo", "yolo-archived"));
+
+        assertThat(projectNames, containsInAnyOrder("basic", "yolo"));
+    }
+
+    @Test
+    public void fetchRepos_BelongingToUser() throws Exception {
+        navigator = navigatorForRepoOwner("stephenc", null);
+        final Set<String> projectNames = new HashSet<>();
+        final SCMSourceObserver observer = getObserver(projectNames);
+
+        navigator.visitSources(observer);
+
+        assertThat(projectNames, containsInAnyOrder("yolo", "yolo-archived"));
+    }
+
+    @Test
+    public void fetchRepos_BelongingToUser_ExcludingArchived() throws Exception {
+        navigator = navigatorForRepoOwner("stephenc", null);
+        navigator.setTraits(Collections.singletonList(new ExcludeArchivedRepositoriesTrait()));
+        final Set<String> projectNames = new HashSet<>();
+        final SCMSourceObserver observer = getObserver(projectNames);
+
+        navigator.visitSources(observer);
+
+        assertThat(projectNames, containsInAnyOrder("yolo"));
+    }
+
+    @Test
+    public void appliesFilters() throws Exception {
+        final Set<String> projectNames = new HashSet<>();
+        final SCMSourceObserver observer = getObserver(projectNames);
+
+        navigator.visitSources(SCMSourceObserver.filter(observer, "yolo", "rando-unknown"));
+
+        assertEquals(projectNames, Collections.singleton("yolo"));
     }
 
     @Test
     public void fetchActions() throws Exception {
-        assertThat(navigator.fetchActions(Mockito.mock(SCMNavigatorOwner.class), null, null), Matchers.<Action>containsInAnyOrder(
-                Matchers.<Action>is(
+        assertThat(navigator.fetchActions(Mockito.mock(SCMNavigatorOwner.class), null, null), Matchers.containsInAnyOrder(
+                Matchers.is(
                         new ObjectMetadataAction("CloudBeers, Inc.", null, "https://github.com/cloudbeers")
                 ),
-                Matchers.<Action>is(new GitHubOrgMetadataAction("https://avatars.githubusercontent.com/u/4181899?v=3")),
-                Matchers.<Action>is(new GitHubLink("icon-github-logo", "https://github.com/cloudbeers"))));
+                Matchers.is(new GitHubOrgMetadataAction("https://avatars.githubusercontent.com/u/4181899?v=3")),
+                Matchers.is(new GitHubLink("icon-github-logo", "https://github.com/cloudbeers"))));
     }
 
     @Test
@@ -202,50 +370,68 @@ public class GitHubSCMNavigatorTest {
             mockStrategy.grant(Item.CONFIGURE).onItems(dummy).to("bob");
             mockStrategy.grant(Item.EXTENDED_READ).onItems(dummy).to("jim");
             r.jenkins.setAuthorizationStrategy(mockStrategy);
-            ACL.impersonate(User.get("admin").impersonate(), new Runnable() {
-                @Override
-                public void run() {
-                    ListBoxModel rsp = d.doFillCredentialsIdItems(dummy, "", "does-not-exist");
-                    assertThat("Expecting only the provided value so that form config unchanged", rsp, hasSize(1));
-                    assertThat("Expecting only the provided value so that form config unchanged", rsp.get(0).value,
-                            is("does-not-exist"));
-                    rsp = d.doFillCredentialsIdItems(null, "", "does-not-exist");
-                    assertThat("Expecting just the empty entry", rsp, hasSize(1));
-                    assertThat("Expecting just the empty entry", rsp.get(0).value, is(""));
-                }
-            });
-            ACL.impersonate(User.get("bob").impersonate(), new Runnable() {
-                @Override
-                public void run() {
-                    ListBoxModel rsp = d.doFillCredentialsIdItems(dummy, "", "does-not-exist");
-                    assertThat("Expecting just the empty entry", rsp, hasSize(1));
-                    assertThat("Expecting just the empty entry", rsp.get(0).value, is(""));
-                    rsp = d.doFillCredentialsIdItems(null, "", "does-not-exist");
-                    assertThat("Expecting only the provided value so that form config unchanged", rsp, hasSize(1));
-                    assertThat("Expecting only the provided value so that form config unchanged", rsp.get(0).value,
-                            is("does-not-exist"));
-                }
-            });
-            ACL.impersonate(User.get("jim").impersonate(), new Runnable() {
-                @Override
-                public void run() {
-                    ListBoxModel rsp = d.doFillCredentialsIdItems(dummy, "", "does-not-exist");
-                    assertThat("Expecting just the empty entry", rsp, hasSize(1));
-                    assertThat("Expecting just the empty entry", rsp.get(0).value, is(""));
-                }
-            });
-            ACL.impersonate(User.get("sue").impersonate(), new Runnable() {
-                @Override
-                public void run() {
-                    ListBoxModel rsp = d.doFillCredentialsIdItems(dummy, "", "does-not-exist");
-                    assertThat("Expecting only the provided value so that form config unchanged", rsp, hasSize(1));
-                    assertThat("Expecting only the provided value so that form config unchanged", rsp.get(0).value, is("does-not-exist"));
-                }
-            });
+            try (ACLContext ctx = ACL.as(User.getById("admin", true).impersonate())) {
+                ListBoxModel rsp = d.doFillCredentialsIdItems(dummy, "", "does-not-exist");
+                assertThat("Expecting only the provided value so that form config unchanged", rsp, hasSize(1));
+                assertThat("Expecting only the provided value so that form config unchanged", rsp.get(0).value,
+                        is("does-not-exist"));
+                rsp = d.doFillCredentialsIdItems(null, "", "does-not-exist");
+                assertThat("Expecting just the empty entry", rsp, hasSize(1));
+                assertThat("Expecting just the empty entry", rsp.get(0).value, is(""));
+            }
+            try (ACLContext ctx = ACL.as(User.getById("bob", true).impersonate())) {
+                ListBoxModel rsp = d.doFillCredentialsIdItems(dummy, "", "does-not-exist");
+                assertThat("Expecting just the empty entry", rsp, hasSize(1));
+                assertThat("Expecting just the empty entry", rsp.get(0).value, is(""));
+                rsp = d.doFillCredentialsIdItems(null, "", "does-not-exist");
+                assertThat("Expecting only the provided value so that form config unchanged", rsp, hasSize(1));
+                assertThat("Expecting only the provided value so that form config unchanged", rsp.get(0).value,
+                        is("does-not-exist"));
+            }
+            try (ACLContext ctx = ACL.as(User.getById("jim", true).impersonate())) {
+                ListBoxModel rsp = d.doFillCredentialsIdItems(dummy, "", "does-not-exist");
+                assertThat("Expecting just the empty entry", rsp, hasSize(1));
+                assertThat("Expecting just the empty entry", rsp.get(0).value, is(""));
+            }
+            try (ACLContext ctx = ACL.as(User.getById("sue", true).impersonate())) {
+                ListBoxModel rsp = d.doFillCredentialsIdItems(dummy, "", "does-not-exist");
+                assertThat("Expecting only the provided value so that form config unchanged", rsp, hasSize(1));
+                assertThat("Expecting only the provided value so that form config unchanged", rsp.get(0).value, is("does-not-exist"));
+            }
         } finally {
             r.jenkins.setSecurityRealm(realm);
             r.jenkins.setAuthorizationStrategy(strategy);
             r.jenkins.remove(dummy);
         }
     }
+
+    private SCMSourceObserver getObserver(Collection<String> names){
+        return new SCMSourceObserver() {
+            @NonNull
+            @Override
+            public SCMSourceOwner getContext() {
+                return scmSourceOwner;
+            }
+
+            @NonNull
+            @Override
+            public TaskListener getListener() {
+                return new LogTaskListener(Logger.getAnonymousLogger(), Level.INFO);
+            }
+
+            @NonNull
+            @Override
+            public ProjectObserver observe(@NonNull String projectName) throws IllegalArgumentException {
+                names.add(projectName);
+                return new NoOpProjectObserver();
+            }
+
+            @Override
+            public void addAttribute(@NonNull String key, @Nullable Object value)
+                    throws IllegalArgumentException, ClassCastException {
+
+            }
+        };
+    }
+
 }

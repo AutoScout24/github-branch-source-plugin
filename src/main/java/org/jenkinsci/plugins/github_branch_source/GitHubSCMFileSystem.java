@@ -32,11 +32,14 @@ import hudson.Extension;
 import hudson.model.Item;
 import hudson.plugins.git.GitSCM;
 import hudson.scm.SCM;
+
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 import java.util.Objects;
+
+import hudson.scm.SCMDescriptor;
 import jenkins.plugins.git.AbstractGitSCMSource;
 import jenkins.plugins.git.GitTagSCMRevision;
 import jenkins.scm.api.SCMFile;
@@ -44,9 +47,8 @@ import jenkins.scm.api.SCMFileSystem;
 import jenkins.scm.api.SCMHead;
 import jenkins.scm.api.SCMRevision;
 import jenkins.scm.api.SCMSource;
-import org.apache.commons.lang.StringUtils;
+import jenkins.scm.api.SCMSourceDescriptor;
 import org.apache.commons.lang.time.FastDateFormat;
-import org.eclipse.jgit.lib.Constants;
 import org.kohsuke.github.GHCommit;
 import org.kohsuke.github.GHRef;
 import org.kohsuke.github.GHRepository;
@@ -80,9 +82,13 @@ public class GitHubSCMFileSystem extends SCMFileSystem implements GitHubClosable
         this.repo = repo;
         if (rev != null) {
             if (rev.getHead() instanceof PullRequestSCMHead) {
-                PullRequestSCMHead pr = (PullRequestSCMHead) rev.getHead();
-                assert !pr.isMerge(); // TODO see below
-                this.ref = ((PullRequestSCMRevision) rev).getPullHash();
+                PullRequestSCMRevision prRev = (PullRequestSCMRevision) rev;
+                PullRequestSCMHead pr = (PullRequestSCMHead) prRev.getHead();
+                if (pr.isMerge()) {
+                    this.ref = prRev.getMergeHash();
+                } else {
+                    this.ref = prRev.getPullHash();
+                }
             } else if (rev instanceof AbstractGitSCMSource.SCMRevisionImpl) {
                 this.ref = ((AbstractGitSCMSource.SCMRevisionImpl) rev).getHash();
             } else {
@@ -213,12 +219,23 @@ public class GitHubSCMFileSystem extends SCMFileSystem implements GitHubClosable
             return false;
         }
 
+        @Override
+        protected boolean supportsDescriptor(SCMDescriptor scmDescriptor) {
+            // TODO implement a GitHubSCM so we can work for those
+            return false;
+        }
+
         /**
          * {@inheritDoc}
          */
         @Override
         public boolean supports(SCMSource source) {
             return source instanceof GitHubSCMSource;
+        }
+
+        @Override
+        protected boolean supportsDescriptor(SCMSourceDescriptor scmSourceDescriptor) {
+            return scmSourceDescriptor instanceof GitHubSCMSource.DescriptorImpl;
         }
 
         /**
@@ -244,42 +261,35 @@ public class GitHubSCMFileSystem extends SCMFileSystem implements GitHubClosable
             GitHub github = Connector.connect(apiUri, credentials);
             try {
                 try {
-                    github.checkApiUrlValidity();
+                    Connector.checkApiUrlValidity(github, credentials);
                 } catch (HttpException e) {
                     String message = String.format("It seems %s is unreachable",
-                            apiUri == null ? GitHubSCMSource.GITHUB_URL : apiUri);
+                            apiUri);
                     throw new IOException(message);
                 }
                 String refName;
+
                 if (head instanceof BranchSCMHead) {
                     refName = "heads/" + head.getName();
                 } else if (head instanceof GitHubTagSCMHead) {
                     refName = "tags/" + head.getName();
                 } else if (head instanceof PullRequestSCMHead) {
-                    PullRequestSCMHead pr = (PullRequestSCMHead) head;
-                    if (!pr.isMerge() && pr.getSourceRepo() != null) {
-                        GHUser user = github.getUser(pr.getSourceOwner());
-                        if (user == null) {
-                            // we need to release here as we are not throwing an exception or transferring
-                            // responsibility to FS
-                            Connector.release(github);
-                            return null;
+                    refName = null;
+                    if (rev instanceof PullRequestSCMRevision) {
+                        PullRequestSCMRevision prRev = (PullRequestSCMRevision) rev;
+                        if (((PullRequestSCMHead)head).isMerge()) {
+                            if (prRev.getMergeHash() == null) {
+                                // we need to release here as we are not throwing an exception or transferring responsibility to FS
+                                Connector.release(github);
+                                return null;
+                            }
+                            prRev.validateMergeHash();
                         }
-                        GHRepository repo = user.getRepository(pr.getSourceRepo());
-                        if (repo == null) {
-                            // we need to release here as we are not throwing an exception or transferring
-                            // responsibility to FS
-                            Connector.release(github);
-                            return null;
-                        }
-                        return new GitHubSCMFileSystem(
-                                github, repo,
-                                pr.getSourceBranch(),
-                                rev);
+                    } else {
+                        // we need to release here as we are not throwing an exception or transferring responsibility to FS
+                        Connector.release(github);
+                        return null;
                     }
-                    // we need to release here as we are not throwing an exception or transferring responsibility to FS
-                    Connector.release(github);
-                    return null; // TODO support merge revisions somehow
                 } else {
                     // we need to release here as we are not throwing an exception or transferring responsibility to FS
                     Connector.release(github);
@@ -298,6 +308,8 @@ public class GitHubSCMFileSystem extends SCMFileSystem implements GitHubClosable
                     Connector.release(github);
                     return null;
                 }
+
+
                 if (rev == null) {
                     GHRef ref = repo.getRef(refName);
                     if ("tag".equalsIgnoreCase(ref.getObject().getType())) {

@@ -25,92 +25,65 @@
 
 package org.jenkinsci.plugins.github_branch_source;
 
-import com.github.tomakehurst.wiremock.common.FileSource;
-import com.github.tomakehurst.wiremock.common.SingleRootFileSource;
-import com.github.tomakehurst.wiremock.core.WireMockConfiguration;
-import com.github.tomakehurst.wiremock.extension.Parameters;
-import com.github.tomakehurst.wiremock.extension.ResponseTransformer;
-import com.github.tomakehurst.wiremock.http.Request;
-import com.github.tomakehurst.wiremock.http.Response;
-import com.github.tomakehurst.wiremock.junit.WireMockRule;
-import java.io.File;
-import java.io.IOException;
-import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
+import hudson.AbortException;
 import jenkins.plugins.git.AbstractGitSCMSource;
 import jenkins.scm.api.SCMFile;
 import jenkins.scm.api.SCMFileSystem;
 import jenkins.scm.api.SCMHead;
+import jenkins.scm.api.SCMHeadOrigin;
 import jenkins.scm.api.SCMRevision;
-import org.apache.commons.io.IOUtils;
-import org.apache.commons.lang.StringUtils;
+import jenkins.scm.api.mixin.ChangeRequestCheckoutStrategy;
 import org.hamcrest.Matchers;
 import org.junit.Before;
-import org.junit.ClassRule;
-import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
-import org.jvnet.hudson.test.JenkinsRule;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
 import static com.github.tomakehurst.wiremock.client.WireMock.get;
-import static com.github.tomakehurst.wiremock.client.WireMock.urlMatching;
+import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.instanceOf;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.notNullValue;
-import static org.junit.Assert.assertThat;
+import static org.hamcrest.core.IsNull.nullValue;
 import static org.junit.Assume.assumeThat;
 
 @RunWith(Parameterized.class)
-public class GitHubSCMFileSystemTest {
-    /**
-     * All tests in this class only use Jenkins for the extensions
-     */
-    @ClassRule
-    public static JenkinsRule r = new JenkinsRule();
+public class GitHubSCMFileSystemTest extends AbstractGitHubWireMockTest {
 
-    public static WireMockRuleFactory factory = new WireMockRuleFactory();
     public static SCMHead master = new BranchSCMHead("master");
     private final SCMRevision revision;
-    @Rule
-    public WireMockRule githubRaw = factory.getRule(WireMockConfiguration.options()
-            .dynamicPort()
-            .usingFilesUnderClasspath("raw")
-    );
-    @Rule
-    public WireMockRule githubApi = factory.getRule(WireMockConfiguration.options()
-            .dynamicPort()
-            .usingFilesUnderClasspath("api")
-            .extensions(
-                    new ResponseTransformer() {
-                        @Override
-                        public Response transform(Request request, Response response, FileSource files,
-                                                  Parameters parameters) {
-                            if ("application/json"
-                                    .equals(response.getHeaders().getContentTypeHeader().mimeTypePart())) {
-                                return Response.Builder.like(response)
-                                        .but()
-                                        .body(response.getBodyAsString()
-                                                .replace("https://api.github.com/",
-                                                        "http://localhost:" + githubApi.port() + "/")
-                                                .replace("https://raw.githubusercontent.com/",
-                                                        "http://localhost:" + githubRaw.port() + "/")
-                                        )
-                                        .build();
-                            }
-                            return response;
-                        }
 
-                        @Override
-                        public String getName() {
-                            return "url-rewrite";
-                        }
+    public static PullRequestSCMHead prHead = new PullRequestSCMHead("PR-2", "stephenc", "yolo", "master", 2, (BranchSCMHead) master,
+        SCMHeadOrigin.Fork.DEFAULT, ChangeRequestCheckoutStrategy.HEAD);
+    public static PullRequestSCMRevision prHeadRevision = new PullRequestSCMRevision(
+        prHead,
+        "8f1314fc3c8284d8c6d5886d473db98f2126071c",
+        "c0e024f89969b976da165eecaa71e09dc60c3da1");
 
-                    })
-    );
+
+    public static PullRequestSCMHead prMerge = new PullRequestSCMHead("PR-2", "stephenc", "yolo", "master", 2, (BranchSCMHead) master,
+        SCMHeadOrigin.Fork.DEFAULT, ChangeRequestCheckoutStrategy.MERGE);
+    public static PullRequestSCMRevision prMergeRevision = new PullRequestSCMRevision(
+        prMerge,
+        "8f1314fc3c8284d8c6d5886d473db98f2126071c",
+        "c0e024f89969b976da165eecaa71e09dc60c3da1",
+        "38814ca33833ff5583624c29f305be9133f27a40");
+
+    public static PullRequestSCMRevision prMergeInvalidRevision = new PullRequestSCMRevision(
+        prMerge,
+        "8f1314fc3c8284d8c6d5886d473db98f2126071c",
+        "c0e024f89969b976da165eecaa71e09dc60c3da1",
+        null);
+
+    public static PullRequestSCMRevision prMergeNotMergeableRevision = new PullRequestSCMRevision(
+        prMerge,
+        "8f1314fc3c8284d8c6d5886d473db98f2126071c",
+        "c0e024f89969b976da165eecaa71e09dc60c3da1",
+        PullRequestSCMRevision.NOT_MERGEABLE_HASH);
+
     private GitHubSCMSource source;
 
     public GitHubSCMFileSystemTest(String revision) {
@@ -127,20 +100,22 @@ public class GitHubSCMFileSystemTest {
     }
 
     @Before
-    public void prepareMockGitHub() throws Exception {
-        new File("src/test/resources/api/mappings").mkdirs();
-        new File("src/test/resources/api/__files").mkdirs();
-        new File("src/test/resources/raw/mappings").mkdirs();
-        new File("src/test/resources/raw/__files").mkdirs();
-        githubApi.enableRecordMappings(new SingleRootFileSource("src/test/resources/api/mappings"),
-                new SingleRootFileSource("src/test/resources/api/__files"));
-        githubRaw.enableRecordMappings(new SingleRootFileSource("src/test/resources/raw/mappings"),
-                new SingleRootFileSource("src/test/resources/raw/__files"));
-        githubApi.stubFor(
-                get(urlMatching(".*")).atPriority(10).willReturn(aResponse().proxiedFrom("https://api.github.com/")));
-        githubRaw.stubFor(get(urlMatching(".*")).atPriority(10)
-                .willReturn(aResponse().proxiedFrom("https://raw.githubusercontent.com/")));
+    @Override
+    public void prepareMockGitHub() {
+        super.prepareMockGitHub();
         source = new GitHubSCMSource(null, "http://localhost:" + githubApi.port(), GitHubSCMSource.DescriptorImpl.SAME, null, "cloudbeers", "yolo");
+    }
+
+    @Override
+    void prepareMockGitHubFileMappings() {
+        super.prepareMockGitHubFileMappings();
+        githubApi.stubFor(
+            get(urlEqualTo("/repos/cloudbeers/yolo/pulls/2"))
+                .willReturn(
+                    aResponse()
+                        .withHeader("Content-Type", "application/json; charset=utf-8")
+                        .withBodyFile("body-yolo-pulls-2-mergeable-true.json")));
+
     }
 
     @Test
@@ -180,16 +155,21 @@ public class GitHubSCMFileSystemTest {
                 is("c0e024f89969b976da165eecaa71e09dc60c3da1"));
         SCMFileSystem fs = SCMFileSystem.of(source, master, revision);
 
-        // On windows, if somebody has not configured Git correctly, the checkout may have "fixed" line endings
-        // So let's detect that and fix our expectations.
         String expected = "Some text\n";
-        try (InputStream is = getClass().getResourceAsStream("/raw/__files/body-fu-bar.txt-b4k4I.txt")) {
-            if (is != null) {
-                expected = IOUtils.toString(is, StandardCharsets.US_ASCII);
-            }
-        } catch (IOException e) {
-            // ignore
-        }
+        // In previous versions of github-api, GHContent.read() (called by contentAsString())
+        // would pull from the "raw" url of the GHContent instance.
+        // Thus on windows, if somebody did not configure Git correctly,
+        // the checkout may have "fixed" line endings that we needed to handle.
+        // The problem with the raw url data is that it can get out of sync when from the actual content.
+        // The GitHub API info stays sync'd and correct, so now GHContent.read() pulls from mime encoded data
+        // in the GHContent record itself. Keeping this for reference in case it changes again.
+//        try (InputStream inputStream = getClass().getResourceAsStream("/raw/__files/body-fu-bar.txt-b4k4I.txt")) {
+//            if (inputStream != null) {
+//                expected = IOUtils.toString(inputStream, StandardCharsets.US_ASCII);
+//            }
+//        } catch (IOException e) {
+//            // ignore
+//        }
         assertThat(fs.getRoot().child("fu/bar.txt").contentAsString(), is(expected));
     }
 
@@ -210,6 +190,60 @@ public class GitHubSCMFileSystemTest {
         SCMFileSystem fs = SCMFileSystem.of(source, master, revision);
         assertThat(fs.getRoot().child("fu").children(),
                 hasItem(Matchers.<SCMFile>hasProperty("name", is("manchu.txt"))));
+    }
+
+    @Test
+    public void resolveDirPRHead() throws Exception {
+        assumeThat(revision, nullValue());
+
+        assertThat(prHeadRevision.isMerge(), is(false));
+
+        SCMFileSystem fs = SCMFileSystem.of(source, prHead, prHeadRevision);
+        assertThat(fs, instanceOf(GitHubSCMFileSystem.class));
+
+        // We can't check the sha, but we can check last modified
+        // which are different for head or merge
+        assertThat(((GitHubSCMFileSystem)fs).lastModified(),
+            is(1480691047000L));
+
+        assertThat(fs.getRoot().child("fu").getType(), is(SCMFile.Type.DIRECTORY));
+    }
+
+    @Test
+    public void resolveDirPRMerge() throws Exception {
+        assumeThat(revision, nullValue());
+
+        assertThat(prMergeRevision.isMerge(), is(true));
+
+        SCMFileSystem fs = SCMFileSystem.of(source, prMerge, prMergeRevision);
+        assertThat(fs, instanceOf(GitHubSCMFileSystem.class));
+
+        // We can't check the sha, but we can check last modified
+        // which are different for head or merge
+        assertThat(((GitHubSCMFileSystem)fs).lastModified(),
+            is(1480777447000L));
+
+        assertThat(fs.getRoot().child("fu").getType(), is(SCMFile.Type.DIRECTORY));
+    }
+
+    @Test
+    public void resolveDirPRInvalidMerge() throws Exception {
+        assumeThat(revision, nullValue());
+
+        assertThat(prMergeInvalidRevision.isMerge(), is(true));
+
+        SCMFileSystem fs = SCMFileSystem.of(source, prMerge, prMergeInvalidRevision);
+        assertThat(fs, nullValue());
+    }
+
+    @Test(expected = AbortException.class)
+    public void resolveDirPRNotMergeable() throws Exception {
+        assumeThat(revision, nullValue());
+
+        assertThat(prMergeNotMergeableRevision.isMerge(), is(true));
+
+        SCMFileSystem fs = SCMFileSystem.of(source, prMerge, prMergeNotMergeableRevision);
+        fail();
     }
 
 }

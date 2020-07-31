@@ -44,6 +44,7 @@ import jenkins.scm.api.trait.SCMSourceTrait;
 import jenkins.scm.api.trait.SCMSourceTraitDescriptor;
 import jenkins.scm.impl.ChangeRequestSCMHeadCategory;
 import jenkins.scm.impl.trait.Discovery;
+import org.jenkinsci.Symbol;
 import org.kohsuke.accmod.Restricted;
 import org.kohsuke.accmod.restrictions.NoExternalUse;
 import org.kohsuke.github.GHPermissionType;
@@ -63,9 +64,7 @@ public class ForkPullRequestDiscoveryTrait extends SCMSourceTrait {
      * The authority.
      */
     @NonNull
-    private final SCMHeadAuthority<? super GitHubSCMSourceRequest, ? extends ChangeRequestSCMHead2, ? extends
-            SCMRevision>
-            trust;
+    private final SCMHeadAuthority<? super GitHubSCMSourceRequest, ? extends ChangeRequestSCMHead2, ? extends SCMRevision> trust;
 
     /**
      * Constructor for stapler.
@@ -75,8 +74,7 @@ public class ForkPullRequestDiscoveryTrait extends SCMSourceTrait {
      */
     @DataBoundConstructor
     public ForkPullRequestDiscoveryTrait(int strategyId,
-                                        @NonNull SCMHeadAuthority<? super GitHubSCMSourceRequest, ? extends
-                                                 ChangeRequestSCMHead2, ? extends SCMRevision> trust) {
+                                         @NonNull SCMHeadAuthority<? super GitHubSCMSourceRequest, ? extends ChangeRequestSCMHead2, ? extends SCMRevision> trust) {
         this.strategyId = strategyId;
         this.trust = trust;
     }
@@ -88,8 +86,7 @@ public class ForkPullRequestDiscoveryTrait extends SCMSourceTrait {
      * @param trust      the authority.
      */
     public ForkPullRequestDiscoveryTrait(@NonNull Set<ChangeRequestCheckoutStrategy> strategies,
-                                         @NonNull SCMHeadAuthority<? super GitHubSCMSourceRequest, ? extends
-                                                 ChangeRequestSCMHead2, ? extends SCMRevision> trust) {
+                                         @NonNull SCMHeadAuthority<? super GitHubSCMSourceRequest, ? extends ChangeRequestSCMHead2, ? extends SCMRevision> trust) {
         this((strategies.contains(ChangeRequestCheckoutStrategy.MERGE) ? 1 : 0)
                 + (strategies.contains(ChangeRequestCheckoutStrategy.HEAD) ? 2 : 0), trust);
     }
@@ -154,6 +151,7 @@ public class ForkPullRequestDiscoveryTrait extends SCMSourceTrait {
     /**
      * Our descriptor.
      */
+    @Symbol("gitHubForkDiscovery")
     @Extension
     @Discovery
     public static class DescriptorImpl extends SCMSourceTraitDescriptor {
@@ -185,7 +183,7 @@ public class ForkPullRequestDiscoveryTrait extends SCMSourceTrait {
         /**
          * Populates the strategy options.
          *
-         * @return the stategy options.
+         * @return the strategy options.
          */
         @NonNull
         @Restricted(NoExternalUse.class)
@@ -222,7 +220,7 @@ public class ForkPullRequestDiscoveryTrait extends SCMSourceTrait {
         @NonNull
         @SuppressWarnings("unused") // stapler
         public SCMHeadAuthority<?, ?, ?> getDefaultTrust() {
-            return new TrustContributors();
+            return new TrustPermission();
         }
     }
 
@@ -250,6 +248,7 @@ public class ForkPullRequestDiscoveryTrait extends SCMSourceTrait {
         /**
          * Our descriptor.
          */
+        @Symbol("gitHubTrustNobody")
         @Extension
         public static class DescriptorImpl extends SCMHeadAuthorityDescriptor {
 
@@ -295,6 +294,7 @@ public class ForkPullRequestDiscoveryTrait extends SCMSourceTrait {
         /**
          * Our descriptor.
          */
+        @Symbol("gitHubTrustContributors")
         @Extension
         public static class DescriptorImpl extends SCMHeadAuthorityDescriptor {
 
@@ -318,7 +318,7 @@ public class ForkPullRequestDiscoveryTrait extends SCMSourceTrait {
     }
 
     /**
-     * An {@link SCMHeadAuthority} that trusts contributors to the repository.
+     * An {@link SCMHeadAuthority} that trusts those with write permission to the repository.
      */
     public static class TrustPermission
             extends SCMHeadAuthority<GitHubSCMSourceRequest, PullRequestSCMHead, PullRequestSCMRevision> {
@@ -351,8 +351,10 @@ public class ForkPullRequestDiscoveryTrait extends SCMSourceTrait {
         /**
          * Our descriptor.
          */
+        @Symbol("gitHubTrustPermissions")
         @Extension
         public static class DescriptorImpl extends SCMHeadAuthorityDescriptor {
+
             /**
              * {@inheritDoc}
              */
@@ -393,6 +395,7 @@ public class ForkPullRequestDiscoveryTrait extends SCMSourceTrait {
         /**
          * Our descriptor.
          */
+        @Symbol("gitHubTrustEveryone")
         @Extension
         public static class DescriptorImpl extends SCMHeadAuthorityDescriptor {
 

@@ -27,16 +27,12 @@ package org.jenkinsci.plugins.github_branch_source;
 
 import edu.umd.cs.findbugs.annotations.NonNull;
 import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
-import java.io.FileNotFoundException;
-import java.io.IOException;
-import java.util.List;
 import jenkins.plugins.git.AbstractGitSCMSource;
 import jenkins.scm.api.SCMFile;
 import jenkins.scm.api.SCMHead;
 import jenkins.scm.api.SCMProbe;
 import jenkins.scm.api.SCMProbeStat;
 import jenkins.scm.api.SCMRevision;
-import org.apache.commons.lang.StringUtils;
 import org.eclipse.jgit.lib.Constants;
 import org.kohsuke.github.GHCommit;
 import org.kohsuke.github.GHContent;
@@ -44,9 +40,16 @@ import org.kohsuke.github.GHRef;
 import org.kohsuke.github.GHRepository;
 import org.kohsuke.github.GitHub;
 
+import java.io.FileNotFoundException;
+import java.io.IOException;
+import java.util.List;
+import java.util.logging.Logger;
+
+
 @SuppressFBWarnings("SE_TRANSIENT_FIELD_NOT_RESTORED")
 class GitHubSCMProbe extends SCMProbe implements GitHubClosable {
     private static final long serialVersionUID = 1L;
+    private static final Logger LOG = Logger.getLogger(GitHubSCMProbe.class.getName());
     private final SCMRevision revision;
     private final transient GitHub gitHub;
     private final transient GHRepository repo;
@@ -145,6 +148,8 @@ class GitHubSCMProbe extends SCMProbe implements GitHubClosable {
                         return SCMProbeStat.fromType(SCMFile.Type.OTHER);
                     }
                 }
+            }
+            for (GHContent content : directoryContent) {
                 if (content.getPath().equalsIgnoreCase(path)) {
                     return SCMProbeStat.fromAlternativePath(content.getPath());
                 }

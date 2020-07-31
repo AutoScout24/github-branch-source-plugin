@@ -29,9 +29,8 @@ import hudson.model.InvisibleAction;
 import java.io.IOException;
 import java.net.URL;
 import jenkins.scm.api.SCMHead;
-import jenkins.scm.api.actions.ChangeRequestAction;
 import org.kohsuke.accmod.Restricted;
-import org.kohsuke.accmod.restrictions.DoNotUse;
+import org.kohsuke.accmod.restrictions.NoExternalUse;
 import org.kohsuke.github.GHPullRequest;
 
 /**
@@ -39,7 +38,7 @@ import org.kohsuke.github.GHPullRequest;
  * @deprecated Retained for binary compatibility only
  */
 @Deprecated
-@Restricted(DoNotUse.class)
+@Restricted(NoExternalUse.class)
 final class PullRequestAction extends InvisibleAction {
 
     private final int number;

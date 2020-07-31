@@ -4,14 +4,14 @@
     <parent>
         <groupId>org.jenkins-ci.plugins</groupId>
         <artifactId>plugin</artifactId>
-        <version>2.33</version>
+        <version>4.2</version>
         <relativePath />
     </parent>
     <artifactId>github-branch-source</artifactId>
-    <version>2.3.3-SNAPSHOT</version>
+    <version>${revision}${changelist}</version>
     <packaging>hpi</packaging>
     <name>GitHub Branch Source Plugin</name>
-    <url>https://wiki.jenkins-ci.org/display/JENKINS/GitHub+Branch+Source+Plugin</url>
+    <url>https://github.com/jenkinsci/${project.artifactId}-plugin</url>
     <description>Multibranch projects and organization folders from GitHub. Maintained by CloudBees, Inc.</description>
     <licenses>
         <license>
@@ -21,146 +21,130 @@
     </licenses>
 
     <properties>
-        <jenkins.version>1.642.3</jenkins.version>
-        <workflow.version>1.14.2</workflow.version>
-        <scm-api.version>2.2.3</scm-api.version>
+        <revision>2.8.4</revision>
+        <changelist>-SNAPSHOT</changelist>
+        <hpi.compatibleSinceVersion>2.2.0</hpi.compatibleSinceVersion>
+        <java.level>8</java.level>
+        <jenkins.version>2.164.3</jenkins.version>
+        <useBeta>true</useBeta>
+        <jcasc.version>1.35</jcasc.version>
+        <jjwt.version>0.10.5</jjwt.version>
     </properties>
 
     <scm>
         <connection>scm:git:git://github.com/jenkinsci/${project.artifactId}-plugin.git</connection>
         <developerConnection>scm:git:git@github.com:jenkinsci/${project.artifactId}-plugin.git</developerConnection>
         <url>https://github.com/jenkinsci/${project.artifactId}-plugin</url>
-        <tag>HEAD</tag>
+        <tag>${scmTag}</tag>
     </scm>
     <dependencies>
         <dependency>
             <groupId>org.jenkins-ci.plugins</groupId>
-            <artifactId>structs</artifactId>
-            <version>1.10</version>
-        </dependency>
-        <dependency>
-            <groupId>org.jenkins-ci.plugins</groupId>
-            <artifactId>scm-api</artifactId>
-            <version>${scm-api.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>org.jenkins-ci.plugins</groupId>
-            <artifactId>git</artifactId>
-            <version>3.6.0</version>
+            <artifactId>jackson2-api</artifactId>
+            <version>2.10.2</version>
         </dependency>
         <dependency>
             <groupId>org.jenkins-ci.plugins</groupId>
             <artifactId>github-api</artifactId>
-            <version>1.90</version>
+            <version>1.115</version>
         </dependency>
+        <!-- TODO: after upgrading jenkins.version >= 2.171, migrate dependency -->
         <dependency>
-            <groupId>org.jenkins-ci.plugins</groupId>
-            <artifactId>credentials</artifactId>
-            <version>2.1.15</version>
+            <groupId>io.jenkins.temp.jelly</groupId>
+            <artifactId>multiline-secrets-ui</artifactId>
+            <version>1.0</version>
         </dependency>
         <dependency>
             <groupId>com.coravy.hudson.plugins.github</groupId>
             <artifactId>github</artifactId>
-            <version>1.26.0</version>
+            <version>1.31.0</version>
         </dependency>
         <dependency>
-            <groupId>org.jenkins-ci.plugins</groupId>
-            <artifactId>display-url-api</artifactId>
-            <version>0.2</version>
-        </dependency>
-        <!-- Currently just here for interactive testing via hpi:run: -->
-        <dependency>
-            <groupId>org.jenkins-ci.plugins</groupId>
-            <artifactId>junit</artifactId>
-            <version>1.6</version>
-            <scope>test</scope>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-api</artifactId>
+            <version>${jjwt.version}</version>
         </dependency>
         <dependency>
-            <groupId>org.jenkins-ci.plugins</groupId>
-            <artifactId>script-security</artifactId>
-            <version>1.16</version>
-            <scope>test</scope>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-impl</artifactId>
+            <version>${jjwt.version}</version>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-jackson</artifactId>
+            <version>${jjwt.version}</version>
+            <scope>runtime</scope>
         </dependency>
         <dependency>
             <groupId>org.jenkins-ci.plugins</groupId>
             <artifactId>scm-api</artifactId>
-            <version>${scm-api.version}</version>
             <classifier>tests</classifier>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.jenkins-ci.plugins</groupId>
-            <artifactId>branch-api</artifactId>
-            <version>2.0.11</version>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.jenkins-ci.plugins.workflow</groupId>
-            <artifactId>workflow-aggregator</artifactId>
-            <version>${workflow.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.jenkins-ci.plugins.workflow</groupId>
             <artifactId>workflow-multibranch</artifactId>
-            <version>${workflow.version}</version>
+            <version>2.20</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>com.github.tomakehurst</groupId>
-            <artifactId>wiremock-standalone</artifactId>
-            <version>2.4.1</version>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.hamcrest</groupId>
-            <artifactId>hamcrest-all</artifactId>
-            <version>1.3</version>
+            <artifactId>wiremock-jre8-standalone</artifactId>
+            <version>2.25.1</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.mockito</groupId>
             <artifactId>mockito-core</artifactId>
-            <version>1.9.5</version>
             <scope>test</scope>
-            <exclusions>
-                <exclusion>
-                    <groupId>org.hamcrest</groupId>
-                    <artifactId>hamcrest-core</artifactId>
-                </exclusion>
-            </exclusions>
+        </dependency>
+
+        <!-- JCasC compatibility -->
+        <dependency>
+            <groupId>io.jenkins</groupId>
+            <artifactId>configuration-as-code</artifactId>
+            <version>${jcasc.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.jenkins.configuration-as-code</groupId>
+            <artifactId>test-harness</artifactId>
+            <version>${jcasc.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.jenkins-ci.plugins.workflow</groupId>
+            <artifactId>workflow-cps-global-lib</artifactId>
+            <scope>test</scope>
         </dependency>
     </dependencies>
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>io.jenkins.tools.bom</groupId>
+                <artifactId>bom-2.164.x</artifactId>
+                <version>9</version>
+                <scope>import</scope>
+                <type>pom</type>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.commons</groupId>
+                <artifactId>commons-lang3</artifactId>
+                <version>3.9</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
     <repositories>
         <repository>
             <id>repo.jenkins-ci.org</id>
-            <url>http://repo.jenkins-ci.org/public/</url>
+            <url>https://repo.jenkins-ci.org/public/</url>
         </repository>
     </repositories>
     <pluginRepositories>
         <pluginRepository>
             <id>repo.jenkins-ci.org</id>
-            <url>http://repo.jenkins-ci.org/public/</url>
+            <url>https://repo.jenkins-ci.org/public/</url>
         </pluginRepository>
     </pluginRepositories>
-
-    <build>
-        <plugins>
-            <plugin>
-                <groupId>org.jenkins-ci.tools</groupId>
-                <artifactId>maven-hpi-plugin</artifactId>
-                <executions>
-                    <execution>
-                        <goals>
-                            <goal>generate-taglib-interface</goal>
-                        </goals>
-                    </execution>
-                </executions>
-                <configuration>
-                    <compatibleSinceVersion>2.2.0</compatibleSinceVersion>
-                </configuration>
-            </plugin>
-        </plugins>
-    </build>
-
 </project>

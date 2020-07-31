@@ -113,7 +113,7 @@ public class PullRequestGHEventSubscriber extends GHEventsSubscriber {
                     .parseEventPayload(new StringReader(event.getPayload()), GHEventPayload.PullRequest.class);
             String action = p.getAction();
             String repoUrl = p.getRepository().getHtmlUrl().toExternalForm();
-            LOGGER.log(Level.INFO, "Received {0} for {1} from {2}",
+            LOGGER.log(Level.FINE, "Received {0} for {1} from {2}",
                     new Object[]{event.getGHEvent(), repoUrl, event.getOrigin()}
             );
             Matcher matcher = REPOSITORY_NAME_PATTERN.matcher(repoUrl);
@@ -132,7 +132,7 @@ public class PullRequestGHEventSubscriber extends GHEventsSubscriber {
                             changedRepository,
                             event.getOrigin()
                     ));
-                } else if ("reopened".equals(action) || "synchronize".equals(action)) {
+                } else if ("reopened".equals(action) || "synchronize".equals(action) || "edited".equals(action)) {
                     fireAfterDelay(new SCMHeadEventImpl(
                             SCMEvent.Type.UPDATED,
                             event.getTimestamp(),
