@@ -7,6 +7,7 @@ import com.github.tomakehurst.wiremock.stubbing.Scenario;
 import hudson.util.LogTaskListener;
 import hudson.util.RingBufferLogHandler;
 import org.junit.Test;
+import org.junit.Ignore;
 import org.junit.Before;
 import org.kohsuke.github.GitHub;
 
@@ -285,6 +286,7 @@ public class ApiRateLimitCheckerTest extends AbstractGitHubWireMockTest {
      *
      * @author  Julian V. Modesto
      */
+    @Ignore("We skip these tests because in our scenario this function is not running - We disabled the check")
     @Test
     public void NormalizeThrottleWithBurnedBuffer() throws Exception {
         long now = System.currentTimeMillis();
@@ -582,6 +584,8 @@ public class ApiRateLimitCheckerTest extends AbstractGitHubWireMockTest {
      *
      * @author  Alex Taylor
      */
+
+    @Ignore("We skip these tests because in our scenario this function is not running - We disabled the check")
     @Test
     public void ExpectedResetTimingOnOver() throws Exception {
 
